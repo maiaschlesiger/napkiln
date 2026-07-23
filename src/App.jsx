@@ -39,6 +39,7 @@ export default function App() {
   const [pendingGraph, setPendingGraph] = useState(null);
   const [reviewStage, setReviewStage] = useState('review');
   const [spaceFlash, setSpaceFlash] = useState(-1);
+  const [tabsHidden, setTabsHidden] = useState(false);
 
   const [folders, setFolders] = useState(INITIAL_FOLDERS);
   const [folderData, setFolderData] = useState(INITIAL_FOLDER_DATA);
@@ -47,11 +48,13 @@ export default function App() {
   const go = (next, opts = {}) => {
     if (!opts.noPush && screen.name !== next.name) histRef.current.push(screen);
     if (opts.reset) histRef.current = [];
+    setTabsHidden(false);
     setNavDir('fwd');
     setScreen(next);
   };
   const goBack = () => {
     const prev = histRef.current.pop() || { name: 'home' };
+    setTabsHidden(false);
     setNavDir('back');
     setScreen(prev);
   };
@@ -100,7 +103,7 @@ export default function App() {
       case 'home':
         return (
           <Capture
-            template={template} onTemplate={setTemplate}
+            template={template} onTemplate={setTemplate} onSheet={setTabsHidden}
             onRecord={() => go({ name: 'record' })}
             onType={() => go({ name: 'record', typed: true })}
             onContinueRecent={() => go({ name: 'preview' })}
@@ -141,7 +144,7 @@ export default function App() {
       case 'space':
         return (
           <Space
-            flash={spaceFlash} onOpen={() => go({ name: 'preview' })}
+            flash={spaceFlash} onSheet={setTabsHidden} onOpen={() => go({ name: 'preview' })}
             onTalk={() => go({ name: 'record' })}
           />
         );
@@ -166,7 +169,7 @@ export default function App() {
       >
         {body}
       </div>
-      {showTabs && (
+      {showTabs && !tabsHidden && (
         <div className="nk-tabs" style={{
           ...abs({ bottom: 56, left: '50%' }), transform: 'translateX(-50%)', display: 'flex', gap: 4,
           background: 'rgba(255,255,255,.9)', border: `1px solid ${dim(.1)}`, borderRadius: 26, padding: 5,

@@ -1,5 +1,5 @@
 // Capture start (6a) — resting screen with structure-template picker and orb.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { INK, TEAL, CLAY, dim, teal, sans, mono, abs } from '../theme.js';
 import { Orb, Sheet } from '../components/ui.jsx';
 
@@ -11,9 +11,11 @@ export const TEMPLATES = [
   { id: 'q', name: 'Around a question', desc: 'one open question with angles branching off it', ghost: ['QUESTION', 'ANGLE', 'ANGLE'] },
 ];
 
-export default function Capture({ template, onTemplate, onRecord, onType, onContinueRecent }) {
+export default function Capture({ template, onTemplate, onRecord, onType, onContinueRecent, onSheet }) {
   const [sheet, setSheet] = useState(false);
   const [pressed, setPressed] = useState(false);
+  // Template sheet covers the bottom — tuck the tab bar away while open
+  useEffect(() => { if (onSheet) onSheet(sheet); }, [sheet]);
   const t = TEMPLATES.find((x) => x.id === template) || TEMPLATES[0];
 
   const tapOrb = () => {

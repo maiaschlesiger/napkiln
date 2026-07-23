@@ -208,9 +208,16 @@ const GRAPH_SCHEMA = {
 
 const SYSTEM_PROMPT =
   'You structure a person\'s spoken, rambling thought into a small graph while they talk. ' +
-  'Extract 2-8 boxes, each typed as PROBLEM, CONTEXT, OPPORTUNITY, IDEA, CONSTRAINT, or OPEN QUESTION, ' +
-  'in the order the thought develops. Compress each box to at most 9 words, keeping the speaker\'s own ' +
-  'wording where possible. Connect consecutive boxes with a 1-2 word label ("led to", "but", "raises", "so"). ' +
+  'Follow the speaker\'s own discourse: begin a NEW box exactly where they move to a new beat — ' +
+  'a temporal shift ("and then", "after that", "eventually"), a contrast ("but", "however"), ' +
+  'a consequence ("so", "which means"), a cause ("because"), or a fresh question ("I wonder", "what if"). ' +
+  'A narrative like "this happened and then that happened" becomes separate EVENT boxes in speaking ' +
+  'order, joined by "then" — never merge distinct beats into one box, and never split a single beat. ' +
+  'Types: EVENT (something that happened or a step in a story), PROBLEM, CONTEXT, OPPORTUNITY, IDEA, ' +
+  'CONSTRAINT, OPEN QUESTION. Extract 2-8 boxes in the order the thought develops. ' +
+  'For each edge, use the connective word the speaker actually said ("then", "but", "so", "because", ' +
+  '"after that"); only fall back to an inferred label ("led to", "raises") when they said none. ' +
+  'Compress each box to at most 9 words, keeping the speaker\'s own wording where possible. ' +
   'Ignore filler words and false starts. If a structure template is named, prefer its box types. ' +
   'The transcript may be mid-sentence — structure what is there so far without inventing content.';
 

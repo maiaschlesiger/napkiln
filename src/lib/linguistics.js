@@ -23,11 +23,13 @@ export function hasPastAction(text) {
 // the seams: a new clause starts at a subject-ish token, after the current
 // clause already has its verb, with another verb (plus object) coming up.
 const SUBJ_TAGS = ['Pronoun', 'Noun', 'ProperNoun', 'Determiner', 'Possessive'];
-const BLOCK_PREV = ['Preposition', 'Determiner', 'Adjective', 'Conjunction', 'Possessive', 'Verb', 'Negative'];
+const BLOCK_PREV = ['Preposition', 'Determiner', 'Adjective', 'Conjunction', 'Possessive', 'Verb', 'Negative', 'QuestionWord'];
 
 export function splitRunOn(text) {
   try {
     if (text.split(/\s+/).filter(Boolean).length < 8) return [text];
+    // What-if musings and wondered questions are one box by nature
+    if (/^(what if|i wonder|i'?m wondering|imagine|how |why |should |who |where )/i.test(text.trim())) return [text];
     const terms = nlp(text).json().flatMap((s) => s.terms);
     const has = (t, tag) => t.tags && t.tags.includes(tag);
     const isVerb = (t) => has(t, 'Verb');

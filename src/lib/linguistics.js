@@ -40,14 +40,19 @@ const OPENER_RE = /^(i wonder (if |whether )?|i'?m wondering (if )?|what if |i (
 // they'd defeat the anchored opener strip ("um i keep wanting to…")
 const PRE_RE = /\b(um+|uh+|erm|hmm|you know|i mean|sort of|kind of|kinda|basically|literally|actually|okay|ok|alright|honestly)\b/gi;
 const LEAD_RE = /^((and|but|so|then|also|well|yeah|right|like)\s+)+/i;
+// Shared clause pre-scrub: fillers out, leading connectives and hedge
+// openers off — what remains is the content the note is about.
+export function prepClause(text) {
+  return text.replace(PRE_RE, ' ').replace(/\s+/g, ' ').trim()
+    .replace(LEAD_RE, '').replace(OPENER_RE, '');
+}
 const AUX_RE = /^(do|does|did|is|are|was|were|should|could|would|can|will|might)$/i;
 const LINKING_RE = /^(feel|feels|felt|seem|seems|seemed|look|looks|looked|sound|sounds|get|gets|got|become|becomes|became)$/i;
 
 export function topicOf(text) {
   try {
     const q = /\?\s*$/.test(text.trim()) || isQuestionish(text);
-    const src = text.replace(PRE_RE, ' ').replace(/\s+/g, ' ').trim()
-      .replace(LEAD_RE, '').replace(OPENER_RE, '');
+    const src = prepClause(text);
     const terms = nlp(src).json().flatMap((s) => s.terms).map((t) => ({ w: t.text, tags: t.tags || [] }));
     const has = (t, tag) => t.tags.includes(tag);
     const isN = (t) => (has(t, 'Noun') || has(t, 'ProperNoun')) && !has(t, 'Pronoun');

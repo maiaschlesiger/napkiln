@@ -181,8 +181,10 @@ export function getSttEngine() { try { return localStorage.getItem(STT_KEY) || '
 export function setSttEngine(v) {
   try { v && v !== 'auto' ? localStorage.setItem(STT_KEY, v) : localStorage.removeItem(STT_KEY); } catch (e) { /* private mode */ }
 }
-export function createCapture(forceBrowser) {
-  const pref = forceBrowser ? 'browser' : getSttEngine();
+// force: 'browser' | 'local' overrides the stored preference (used when one
+// engine fails at runtime and the app hops to the other).
+export function createCapture(force) {
+  const pref = force === true ? 'browser' : force || getSttEngine();
   const browser = () => { const c = new SpeechCapture(); c.label = 'browser speech'; return c; };
   if (pref === 'local' && WhisperCapture.available()) return new WhisperCapture();
   if (pref === 'browser' && SpeechCapture.available()) return browser();

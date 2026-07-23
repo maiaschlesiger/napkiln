@@ -13,11 +13,13 @@ export class SpeechCapture {
     this._active = true;
     this._paused = false;
     this._final = '';
+    this._errors = 0;
     const rec = this._rec = new Recognition();
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = navigator.language || 'en-US';
     rec.onresult = (e) => {
+      this._errors = 0; // the service is alive — reset the failure counter
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
@@ -30,8 +32,19 @@ export class SpeechCapture {
       if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
         this._active = false;
         if (onState) onState('denied');
+        return;
       }
-      // 'no-speech'/'aborted'/'network' fall through to onend, which restarts
+      // 'no-speech' just means silence — keep listening. Real service errors
+      // ('network', 'audio-capture', …) that repeat with no result mean the
+      // browser's speech service is broken (common on iOS): report instead of
+      // restarting silently forever, so the caller can switch engines.
+      if (ev.error !== 'no-speech' && ev.error !== 'aborted') {
+        this._errors += 1;
+        if (this._errors >= 3) {
+          this._active = false;
+          if (onState) onState('error');
+        }
+      }
     };
     rec.onend = () => {
       if (this._active && !this._paused) {

@@ -181,8 +181,22 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
       if (!cap) { setTyped(true); return; }
       capRef.current = cap;
       const base = stateRef.current.transcript ? stateRef.current.transcript.replace(/\s+$/, '') + ' ' : '';
+      // If nothing is heard for a while, say so instead of listening mutely —
+      // the usual causes are a muted mic, a denied permission, or a broken
+      // browser speech service. The status pill opens settings on tap.
+      let quiet = setTimeout(() => setStatus('not hearing you — tap for settings'), 9000);
+      const hop = (to) => {
+        if (to && ((to === 'local' && WhisperCapture.available()) || (to === 'browser' && SpeechCapture.available()))) {
+          forceBrowserRef.current = to;
+          setStatus(null);
+          setAttempt((a) => a + 1);
+        } else setTyped(true);
+      };
       const ok = cap.start((final, interim) => {
         if (!aliveRef.current) return;
+        clearTimeout(quiet);
+        quiet = setTimeout(() => setStatus('not hearing you — tap for settings'), 12000);
+        setStatus(null);
         stateRef.current.transcript = base + final;
         stateRef.current.interim = interim;
         setStrip((stateRef.current.transcript + ' ' + interim).trim());
@@ -190,10 +204,9 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
       }, (st) => {
         if (!aliveRef.current) return;
         if (st === 'denied') setTyped(true);
-        else if (st === 'error') {
-          if (cap.label === 'local whisper' && SpeechCapture.available()) { forceBrowserRef.current = true; setAttempt((a) => a + 1); }
-          else setTyped(true);
-        }
+        // One engine breaking hops to the other: whisper → browser speech,
+        // browser speech (e.g. iOS service errors) → local whisper
+        else if (st === 'error') hop(cap.label === 'local whisper' ? 'browser' : 'local');
         else if (st === 'loading') setStatus('downloading local model…');
         else if (st === 'ready') setStatus(null);
       });
@@ -201,6 +214,7 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
       return () => {
         aliveRef.current = false;
         clearTimeout(timerRef.current);
+        clearTimeout(quiet);
         cap.stop();
         capRef.current = null;
       };

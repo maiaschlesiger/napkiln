@@ -22,7 +22,7 @@ function summarize(seg) {
     .replace(/^(and|but|so|then|also|well|okay|ok|yeah|like)\s+/i, '')
     .replace(/^(the (thing|problem|issue) is( that)?|i (think|guess|feel like)( that)?|it('s| is) (like|that))\s+/i, '');
   const isQ = /\?\s*$/.test(t);
-  t = t.replace(/[.,;!?]+\s*$/, '');
+  t = t.replace(/[.,;!?]+\s*$/, '').replace(/\s+(and|or|but|so)\s*$/i, '');
   const words = t.split(' ');
   if (words.length > 9) t = words.slice(0, 9).join(' ') + '…';
   t = t.charAt(0).toLowerCase() + t.slice(1);
@@ -51,7 +51,11 @@ const CONNECTIVES = [
 ];
 // Question/idea openers also begin a new box, but the opener stays in the
 // clause (it carries the meaning: "I wonder who owns those spaces").
-const OPENERS = ['what if', "i wonder", "i'm wondering", 'the question is'];
+const OPENERS = [
+  'what if', "i wonder", "i'm wondering", 'the question is',
+  'how do i', 'how do we', 'how would', 'how can', 'should i', 'should we',
+  'why do', 'why does', 'why is',
+];
 // Short or ambiguous markers split only when a clause-like continuation
 // follows, so idioms ("I think so", "could finally work") don't fragment.
 const GUARDED = new Set(['then', 'so', 'also', 'finally', 'eventually']);
@@ -117,7 +121,13 @@ function segmentClauses(transcript) {
       rest = rest.slice(cut.index + (cut.keep ? 0 : cut.len)).replace(/^[\s,]+/, '');
     }
   }
-  return clauses.filter((c) => wordCount(c.text) >= 2);
+  // Marker-less run-ons ("I built a prototype my friends loved it nobody
+  // wanted to pay for it") still carry several beats — split them at
+  // POS-detected subject–verb boundaries; the spoken connective stays with
+  // the first piece.
+  return clauses
+    .flatMap((c) => splitRunOn(c.text).map((text, i) => ({ text, connective: i === 0 ? c.connective : null })))
+    .filter((c) => wordCount(c.text) >= 2);
 }
 
 // Connectives that mark narrative progression — their clause is an EVENT.

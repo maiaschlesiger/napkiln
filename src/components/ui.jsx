@@ -68,17 +68,6 @@ export function Orb({ size = 150, label, onClick, style, className }) {
   );
 }
 
-export function SearchBar() {
-  return (
-    <div style={{ margin: '0 24px', height: 44, borderRadius: 22, background: 'rgba(255,255,255,.75)', border: `1px solid ${dim(.1)}`, display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', flex: 'none' }}>
-      <span style={{ width: 13, height: 13, borderRadius: '50%', border: `2px solid ${dim(.3)}`, position: 'relative', flex: 'none' }}>
-        <span style={{ position: 'absolute', right: -5, bottom: -3, width: 7, height: 2, background: dim(.3), transform: 'rotate(45deg)', borderRadius: 1 }} />
-      </span>
-      <span style={{ ...sans(400, 13.5, dim(.4)) }}>Search every thought…</span>
-    </div>
-  );
-}
-
 export function TrashIcon({ color }) {
   return (
     <span style={{ position: 'relative', width: 11, height: 14, display: 'inline-block' }}>

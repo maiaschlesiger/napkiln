@@ -6,6 +6,7 @@
 //                         the heuristic on any failure.
 import { isQuestionish, hasPastAction, splitRunOn } from './linguistics.js';
 import { refineType, neuralEnabled } from './semantic.js';
+import { isFluff, scrubFluff, filterUnrelated } from './salience.js';
 
 const TEAL = '#1F8A96', CLAY = '#E0824E';
 const KEY_STORAGE = 'napkiln-anthropic-key';
@@ -23,7 +24,7 @@ export function summarizeClause(seg) { return summarize(seg); }
 
 function summarize(seg) {
   let t = cleanText(seg)
-    .replace(/^(and|but|so|then|also|well|okay|ok|yeah|like)\s+/i, '')
+    .replace(/^((and|but|so|then|also|well|okay|ok|alright|yeah|right|like)\s+)+/i, '')
     .replace(/^(the (thing|problem|issue) is( that)?|i (think|guess|feel like)( that)?|it('s| is) (like|that))\s+/i, '');
   const isQ = /\?\s*$/.test(t);
   t = t.replace(/[.,;!?]+\s*$/, '').replace(/\s+(and|or|but|so)\s*$/i, '');
@@ -170,7 +171,11 @@ export class HeuristicStructurer {
   constructor() { this.engine = neuralEnabled() ? 'on-device neural' : 'on-device'; }
   async structure(transcript) {
     const nodes = [], edges = [], seen = new Set();
-    for (const clause of segmentClauses(transcript)) {
+    // Cut the fluff: meta-talk clauses always; semantically unrelated asides
+    // when the neural boost is on
+    let clauses = segmentClauses(scrubFluff(transcript)).filter((c) => !isFluff(c.text));
+    clauses = await filterUnrelated(clauses);
+    for (const clause of clauses) {
       let type = classify(clause.text, clause.connective);
       // IDEA is the fall-through bucket — let the neural boost (when enabled)
       // take a semantic second look at clauses the rules couldn't type
@@ -237,7 +242,10 @@ const SYSTEM_PROMPT =
   'For each edge, use the connective word the speaker actually said ("then", "but", "so", "because", ' +
   '"after that"); only fall back to an inferred label ("led to", "raises") when they said none. ' +
   'Compress each box to at most 9 words, keeping the speaker\'s own wording where possible. ' +
-  'Ignore filler words and false starts. If a structure template is named, prefer its box types. ' +
+  'Ignore filler words and false starts, and omit fluff entirely: greetings, mic checks, asides, ' +
+  'and meta-talk ("where was I", "hold on") — plus anything semantically unrelated to the thought. ' +
+  'Only what is important and belongs to the thought becomes a box. ' +
+  'If a structure template is named, prefer its box types. ' +
   'The transcript may be mid-sentence — structure what is there so far without inventing content.';
 
 export class ClaudeStructurer {

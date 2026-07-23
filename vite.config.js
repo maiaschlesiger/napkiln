@@ -4,11 +4,15 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: {
-    // Allow tunnel hostnames (e.g. `cloudflared tunnel --url http://localhost:5173`)
-    // so the app can be opened on a phone over HTTPS — required for mic access.
-    allowedHosts: ['.trycloudflare.com'],
+    // Accept any hostname so tunnels (cloudflared, ngrok, named domains) can
+    // reach the dev server for phone testing over HTTPS — required for mic
+    // access. Fine for a prototype; tighten to a domain list if this ever
+    // serves anything sensitive.
+    allowedHosts: true,
+    host: true,
   },
   preview: {
-    allowedHosts: ['.trycloudflare.com'],
+    allowedHosts: true,
+    host: true,
   },
 });

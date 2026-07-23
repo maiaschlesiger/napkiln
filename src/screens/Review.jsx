@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { INK, TEAL, CLAY, PAPER, dim, teal, clay, sans, mono, abs } from '../theme.js';
 import { Confirm, MicIcon, RoundBtn, Snack, TrashIcon } from '../components/ui.jsx';
+import { createCapture } from '../lib/whisper.js';
+import { summarizeClause } from '../lib/structurer.js';
 
 const DEMO_NODES = [
   { type: 'PROBLEM', c: TEAL, text: 'voice notes go unheard', solid: true },
@@ -24,7 +26,7 @@ const FOLDER_SPOTS = {
   'Personal questions': ['48%', '70%'], 'New folder…': ['80%', '68%'], 'Let napkiln decide': ['50%', '50%'],
 };
 
-function Box({ n, i, focus, editing, listening, onCommit, onBubble, bind, preview }) {
+function Box({ n, i, focus, editing, listening, micStatus, onCommit, onBubble, bind, preview }) {
   const me = focus === i;
   const focusOn = focus >= 0;
   const inputRef = useRef(null);
@@ -52,9 +54,13 @@ function Box({ n, i, focus, editing, listening, onCommit, onBubble, bind, previe
           />
         : <span style={{ ...sans(400, 14, INK), lineHeight: 1.35, textAlign: 'center' }}>{n.text}</span>}
       {listening === i && (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, background: teal(.12), borderRadius: 14, padding: '6px 12px' }}>
+        <span
+          className="g2-micchip"
+          onClick={(e) => { e.stopPropagation(); onBubble('micstop', i); }}
+          style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 7, background: teal(.12), borderRadius: 14, padding: '6px 12px', cursor: 'pointer' }}
+        >
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: TEAL, animation: 'breathe 1.4s ease-in-out infinite' }} />
-          <span style={sans(500, 12.5, TEAL)}>re-recording this box…</span>
+          <span style={sans(500, 12.5, TEAL)}>{micStatus || 're-recording — tap to finish'}</span>
         </span>
       )}
       {me && editing < 0 && listening < 0 && (
@@ -89,17 +95,50 @@ export default function Review({ graph, stage, mode, folders, onSaved, onBack, o
     if (v.trim()) setNodes((ns) => ns.map((n, k) => (k === i ? { ...n, text: v.trim() } : n)));
     setEditing(-1); setFocus(-1);
   };
+  const micRef = useRef(null);
+  const micHeardRef = useRef(false);
+  const [micStatus, setMicStatus] = useState(null);
+  const stopMic = (commit) => {
+    if (micRef.current) { micRef.current.stop(); micRef.current = null; }
+    setListening(-1); setFocus(-1); setMicStatus(null);
+    if (commit && micHeardRef.current) say('Box re-recorded');
+  };
+  useEffect(() => () => { if (micRef.current) micRef.current.stop(); }, []);
+  const startMic = (i) => {
+    const cap = createCapture();
+    // No capture engine (or mic denied below) → inline editing so the flow
+    // never dead-ends; the demo graph keeps its scripted swap for flavor
+    if (!cap) {
+      if (!dynamic) {
+        setListening(i);
+        setTimeout(() => {
+          setNodes((ns) => ns.map((n, k) => (k === i ? { ...n, text: RERECORD[i % RERECORD.length] } : n)));
+          setListening(-1); setFocus(-1); say('Box re-recorded');
+        }, 1900);
+      } else setEditing(i);
+      return;
+    }
+    micHeardRef.current = false;
+    micRef.current = cap;
+    setListening(i);
+    const ok = cap.start((final, interim) => {
+      const heard = (final + ' ' + interim).trim();
+      if (!heard) return;
+      micHeardRef.current = true;
+      setMicStatus(null);
+      setNodes((ns) => ns.map((n, k) => (k === i ? { ...n, text: summarizeClause(heard) } : n)));
+    }, (st) => {
+      if (st === 'denied' || st === 'error') { stopMic(false); setEditing(i); }
+      else if (st === 'loading') setMicStatus('loading model…');
+      else if (st === 'ready') setMicStatus(null);
+    });
+    if (!ok) { stopMic(false); setEditing(i); }
+  };
   const bubble = (a, i) => {
     if (a === 'edit') setEditing(i);
     else if (a === 'del') setConfirmDel(i);
-    else if (a === 'mic') {
-      setListening(i);
-      setTimeout(() => {
-        setNodes((ns) => ns.map((n, k) => (k === i ? { ...n, text: dynamic ? n.text : RERECORD[i % RERECORD.length] } : n)));
-        setListening(-1); setFocus(-1);
-        say('Box re-recorded');
-      }, 1900);
-    }
+    else if (a === 'mic') startMic(i);
+    else if (a === 'micstop') stopMic(true);
   };
   const bind = (i) => ({
     onContextMenu: (e) => { e.preventDefault(); setFocus(i); setEditing(-1); },
@@ -115,7 +154,7 @@ export default function Review({ graph, stage, mode, folders, onSaved, onBack, o
   const chain = (
     <div
       className="g2-graph"
-      onClick={(e) => { if (!e.target.closest('[data-i]') && focus >= 0 && editing < 0 && listening < 0) setFocus(-1); }}
+      onClick={(e) => { if (e.target.closest('[data-i]')) return; if (listening >= 0) { stopMic(true); return; } if (focus >= 0 && editing < 0) setFocus(-1); }}
       style={{ ...abs(preview ? { top: 136, bottom: 196, left: 0, right: 0 } : { top: 106, bottom: 318, left: 0, right: 0 }), overflowY: 'auto', padding: '12px 24px', boxSizing: 'border-box' }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -128,7 +167,7 @@ export default function Review({ graph, stage, mode, folders, onSaved, onBack, o
                 </span>
               </span>
             )}
-            <Box n={n} i={i} focus={focus} editing={editing} listening={listening} onCommit={commitEdit} onBubble={bubble} bind={bind} preview={preview} />
+            <Box n={n} i={i} focus={focus} editing={editing} listening={listening} micStatus={micStatus} onCommit={commitEdit} onBubble={bubble} bind={bind} preview={preview} />
           </span>
         ))}
       </div>

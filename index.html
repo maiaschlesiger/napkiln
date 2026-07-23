@@ -1,115 +1,19 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>napkiln — full app prototype (10a)</title>
-<meta name="description" content="napkiln: speak an idea, and see its shape. Capture → review → Space and Library.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet">
-<style>
-  /* Canvas around the phone (matches the exploration doc background) */
-  html, body { height: 100%; }
-  body {
-    margin: 0;
-    background: #E7E5E1;
-    font-family: 'Figtree', system-ui, sans-serif;
-    color: #3C4249;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    padding: 24px;
-    box-sizing: border-box;
-  }
-  a { color: #1F8A96; }
-  a:hover { color: #E0824E; }
-
-  /* Shared keyframes used by the napkiln components
-     (mirrors the <helmet> atomics from the design-doc prototype). */
-  @keyframes breathe { 0%,100%{transform:scale(1);opacity:.5} 50%{transform:scale(1.12);opacity:.8} }
-  @keyframes blobA { 0%,100%{border-radius:46% 54% 52% 48%/48% 46% 54% 52%;transform:scale(1)} 33%{border-radius:54% 46% 44% 56%/52% 56% 44% 48%;transform:scale(1.05)} 66%{border-radius:48% 52% 56% 44%/44% 50% 50% 56%;transform:scale(.97)} }
-  @keyframes blobB { 0%,100%{border-radius:52% 48% 44% 56%/54% 48% 52% 46%;transform:scale(1.02) rotate(8deg)} 50%{border-radius:44% 56% 54% 46%/48% 54% 46% 52%;transform:scale(.94) rotate(-6deg)} }
-  @keyframes buildin { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
-  @keyframes eq { 0%,100%{transform:scaleY(.3)} 50%{transform:scaleY(1)} }
-  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
-
-  /* iPhone-style frame that hosts the prototype */
-  .nk-device {
-    width: 402px;
-    height: 874px;
-    border-radius: 48px;
-    overflow: hidden;
-    position: relative;
-    background: #F0EFEC;
-    box-shadow: 0 40px 80px rgba(0,0,0,.18), 0 0 0 1px rgba(0,0,0,.12);
-    font-family: 'Figtree', sans-serif;
-    flex: none;
-  }
-  .nk-notch {
-    position: absolute; top: 11px; left: 50%; transform: translateX(-50%);
-    width: 126px; height: 37px; border-radius: 24px; background: #000; z-index: 50;
-  }
-  .nk-statusbar {
-    position: absolute; top: 0; left: 0; right: 0; height: 60px;
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 0 36px; z-index: 40; pointer-events: none;
-  }
-  .nk-home-indicator {
-    position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
-    width: 139px; height: 5px; border-radius: 100px; background: rgba(0,0,0,.25); z-index: 60;
-  }
-
-  /* Scale the fixed-size device down on short / narrow viewports so the
-     whole screen stays visible without clipping. */
-  @media (max-height: 920px), (max-width: 450px) {
-    body { align-items: flex-start; }
-    .nk-device { transform: scale(var(--nk-scale, 1)); transform-origin: top center; }
-  }
-</style>
-</head>
-<body>
-  <!-- 10a — the whole app, one working prototype:
-       capture (6a) → recording (5a) → review (7a) → saved,
-       tabs to Space (9b → 9d preview) and Library (8e folders / 8d recents). -->
-  <div class="nk-device" data-screen-label="10a napkiln — full app prototype">
-    <napkiln-app></napkiln-app>
-    <div class="nk-notch"></div>
-    <div class="nk-statusbar">
-      <span style="font:590 16px -apple-system,system-ui,sans-serif;color:#000">9:41</span>
-      <span style="display:flex;gap:6px;align-items:center">
-        <span style="width:18px;height:11px;border-radius:2px;background:#000"></span>
-        <span style="width:15px;height:11px;border-radius:2px;background:#000;opacity:.8"></span>
-        <span style="width:24px;height:12px;border-radius:4px;border:1px solid rgba(0,0,0,.4);position:relative"><span style="position:absolute;inset:2px;background:#000;border-radius:2px"></span></span>
-      </span>
-    </div>
-    <div class="nk-home-indicator"></div>
-  </div>
-
-  <!-- napkiln web components. Each defines its own custom element and they
-       coordinate purely through bubbling CustomEvents (nk-record, nk-saved,
-       nk-space, nk-open, nk-back, nk-new, nk-talk, nk-sheet). -->
-  <script src="./app/capture-start.js"></script>
-  <script src="./app/graph-edit2.js"></script>
-  <script src="./app/space-map.js"></script>
-  <script src="./app/napkiln-app.js"></script>
-  <script>
-    // Fit the fixed 402×874 device into the viewport when it's too small.
-    (function () {
-      var device = document.querySelector('.nk-device');
-      function fit() {
-        var pad = 32;
-        var scale = Math.min(
-          1,
-          (window.innerWidth - pad) / 402,
-          (window.innerHeight - pad) / 874
-        );
-        document.documentElement.style.setProperty('--nk-scale', scale.toFixed(4));
-      }
-      window.addEventListener('resize', fit);
-      fit();
-    })();
-  </script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#F0EFEC" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ccircle cx=%2716%27 cy=%2716%27 r=%2712%27 fill=%27%23177B83%27/%3E%3C/svg%3E" />
+    <title>napkiln — full app prototype (10a)</title>
+    <meta name="description" content="napkiln: speak an idea, and see its shape. Capture → review → Space and Library." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>

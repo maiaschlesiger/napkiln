@@ -5,6 +5,7 @@
 //                         used when an API key is configured, falls back to
 //                         the heuristic on any failure.
 import { isQuestionish, hasPastAction, splitRunOn } from './linguistics.js';
+import { refineType, neuralEnabled } from './semantic.js';
 
 const TEAL = '#1F8A96', CLAY = '#E0824E';
 const KEY_STORAGE = 'napkiln-anthropic-key';
@@ -163,11 +164,14 @@ function edgeLabel(prevType, nextType) {
 }
 
 export class HeuristicStructurer {
-  constructor() { this.engine = 'on-device'; }
+  constructor() { this.engine = neuralEnabled() ? 'on-device neural' : 'on-device'; }
   async structure(transcript) {
     const nodes = [], edges = [], seen = new Set();
     for (const clause of segmentClauses(transcript)) {
-      const type = classify(clause.text, clause.connective);
+      let type = classify(clause.text, clause.connective);
+      // IDEA is the fall-through bucket — let the neural boost (when enabled)
+      // take a semantic second look at clauses the rules couldn't type
+      if (type === 'IDEA') type = await refineType(clause.text, type);
       const text = summarize(clause.text);
       const key = type + '|' + text;
       // Dedupe repeated clauses (re-transcription loops) — but a narrative

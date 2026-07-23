@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { INK, TEAL, CLAY, PAPER, dim, teal, sans, mono, abs } from '../theme.js';
 import { Confirm, Sheet } from '../components/ui.jsx';
 import { createStructurer, getApiKey, setApiKey } from '../lib/structurer.js';
+import { neuralEnabled, setNeuralEnabled, neuralAvailable } from '../lib/semantic.js';
 import { SpeechCapture } from '../lib/speech.js';
 import { WhisperCapture, createCapture, getSttEngine, setSttEngine } from '../lib/whisper.js';
 import { TEMPLATES } from './Capture.jsx';
@@ -64,11 +65,13 @@ function AISettings({ open, onClose, capLabel, onApply }) {
   const pref = getSttEngine();
   const [stt, setStt] = useState(whisperOK && (pref === 'local' || capLabel === 'local whisper' || !speechOK) ? 'local' : 'browser');
   const [key, setKey] = useState(getApiKey());
+  const [neural, setNeural] = useState(neuralEnabled());
 
   const save = () => {
     const before = capLabel === 'local whisper' ? 'local' : 'browser';
     setSttEngine(stt);
     setApiKey(key.trim());
+    setNeuralEnabled(neural);
     onClose();
     onApply(stt !== before);
   };
@@ -90,6 +93,13 @@ function AISettings({ open, onClose, capLabel, onApply }) {
       {radio('browser', !speechOK, 'Browser speech', 'fast; audio goes to the browser’s speech service')}
       {radio('local', !whisperOK, 'Local Whisper', 'fully on-device · ~40 MB one-time model download')}
       <div style={{ ...mono(10, dim(.45)), margin: '14px 0 6px' }}>STRUCTURING</div>
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '8px 12px 12px', borderRadius: 12, cursor: neuralAvailable() ? 'pointer' : 'default', opacity: neuralAvailable() ? 1 : .45 }}>
+        <input type="checkbox" className="nk-neural" checked={neural} disabled={!neuralAvailable()} onChange={(e) => setNeural(e.target.checked)} style={{ marginTop: 3, accentColor: TEAL }} />
+        <span>
+          <span style={{ display: 'block', ...sans(500, 13.5, INK) }}>Neural boost</span>
+          <span style={{ ...sans(400, 11.5, dim(.5)), lineHeight: 1.4 }}>a small local model sharpens box types · ~25 MB one-time, fully on-device</span>
+        </span>
+      </label>
       <input
         className="nk-aikey" type="password" value={key} onChange={(e) => setKey(e.target.value)}
         placeholder="Anthropic API key — empty = on-device engine"
@@ -124,7 +134,7 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
   const aliveRef = useRef(true);
 
   const tplName = template && template !== 'free' ? (TEMPLATES.find((t) => t.id === template) || {}).name : null;
-  const engineLabel = () => (structurerRef.current.engine === 'Claude' ? 'Claude' : 'on-device');
+  const engineLabel = () => structurerRef.current.engine;
   const defaultStatus = () => (typed ? 'typing' : 'listening') + ' · ' + engineLabel();
 
   const run = async () => {

@@ -5,6 +5,7 @@
 //                         used when an API key is configured, falls back to
 //                         the heuristic on any failure.
 import { isQuestionish, hasPastAction, splitRunOn, topicOf } from './linguistics.js';
+import { rankTranscript, noteFor } from './notetaker.js';
 import { refineType, neuralEnabled } from './semantic.js';
 import { isFluff, scrubFluff, filterUnrelated } from './salience.js';
 
@@ -20,9 +21,11 @@ const FILLERS = /\b(um+|uh+|erm|hmm|you know|i mean|sort of|kind of|kinda|basica
 const cleanText = (s) => s.replace(FILLERS, ' ').replace(/\s+/g, ' ').trim();
 
 // Also used by the review screen to compress re-recorded box text.
-// Boxes are 3-4 word topic labels: POS-driven extraction first, with the
-// word-cap summarizer as the safety net when no confident topic emerges.
-export function summarizeClause(seg) { return topicOf(seg) || summarize(seg, 4, true); }
+// Boxes are terse notes: importance-ranked extraction first (wink-nlp +
+// TextRank), then POS-pattern topics, then the word-cap summarizer.
+export function summarizeClause(seg) {
+  return noteFor(seg, rankTranscript(seg)) || topicOf(seg) || summarize(seg, 4, true);
+}
 
 const HEDGES = /\b(maybe|probably|possibly|just|really|very|honestly|definitely|pretty much|i mean|i think|i guess)\b/gi;
 
@@ -193,13 +196,16 @@ export class HeuristicStructurer {
     // when the neural boost is on
     let clauses = segmentClauses(scrubFluff(transcript)).filter((c) => !isFluff(c.text));
     clauses = await filterUnrelated(clauses);
+    // Importance scores span the whole transcript, so each box keeps the
+    // words that matter to the thought — not just to its own clause
+    const rank = rankTranscript(scrubFluff(transcript));
     for (let ci = 0; ci < clauses.length; ci++) {
       const clause = clauses[ci];
       let type = classify(clause.text, clause.connective);
       // IDEA is the fall-through bucket — let the neural boost (when enabled)
       // take a semantic second look at clauses the rules couldn't type
       if (type === 'IDEA') type = await refineType(clause.text, type);
-      const text = topicOf(clause.text) || summarize(clause.text, MINIMAL_WORDS, true);
+      const text = noteFor(clause.text, rank) || topicOf(clause.text) || summarize(clause.text, MINIMAL_WORDS, true);
       const key = type + '|' + text;
       // Dedupe repeated clauses (re-transcription loops) — but a narrative
       // connective means the speaker said it happened *again*, so keep it:
@@ -207,7 +213,7 @@ export class HeuristicStructurer {
       if (!text || (seen.has(key) && !NARRATIVE_CONNECTIVES.has(clause.connective))) continue;
       seen.add(key);
       cand.push({ type, text, connective: clause.connective, ci });
-      if (cand.length >= (minimalTypes ? 12 : 8)) break;
+      if (cand.length >= 12) break;
     }
     let kept = cand;
     if (minimalTypes) {
@@ -240,7 +246,7 @@ const GRAPH_SCHEMA = {
         type: 'object',
         properties: {
           type: { type: 'string', enum: NODE_TYPES },
-          text: { type: 'string', description: 'A 3-4 word topic label — essential nouns and verbs only, never a sentence, lowercase start' },
+          text: { type: 'string', description: 'A 3-4 word note — essential nouns/verbs plus any names, numbers, amounts, dates or negations; never a sentence, lowercase start' },
         },
         required: ['type', 'text'],
         additionalProperties: false,
@@ -271,11 +277,13 @@ const SYSTEM_PROMPT =
   'A narrative like "this happened and then that happened" becomes separate EVENT boxes in speaking ' +
   'order, joined by "then" — never merge distinct beats into one box, and never split a single beat. ' +
   'Types: EVENT (something that happened or a step in a story), PROBLEM, CONTEXT, OPPORTUNITY, IDEA, ' +
-  'CONSTRAINT, OPEN QUESTION. Extract 2-8 boxes in the order the thought develops. ' +
+  'CONSTRAINT, OPEN QUESTION. Extract 2-12 boxes in the order the thought develops. ' +
   'For each edge, use the connective word the speaker actually said ("then", "but", "so", "because", ' +
   '"after that"); only fall back to an inferred label ("led to", "raises") when they said none. ' +
-  'Each box is a 3-4 word topic label — only the essential nouns, verbs and qualifiers from the ' +
-  'speaker\'s own wording ("rent too expensive", "saw empty storefront"), never a full sentence. ' +
+  'Each box is a 3-4 word note in the speaker\'s own words — like an expert note taker: ' +
+  'oversimplify the phrasing but never lose an important bit. Keep names, numbers, amounts, ' +
+  'dates, times and negations ("rent eight hundred month", "meet sarah tuesday nine thirty", ' +
+  '"never listen voice memos"); drop pronouns, hedges and glue words. Never a full sentence. ' +
   'Ignore filler words and false starts, and omit fluff entirely: greetings, mic checks, asides, ' +
   'and meta-talk ("where was I", "hold on") — plus anything semantically unrelated to the thought. ' +
   'Only what is important and belongs to the thought becomes a box. ' +
@@ -320,7 +328,7 @@ export class ClaudeStructurer {
       if (data.stop_reason === 'refusal') throw new Error('refusal');
       const block = (data.content || []).find((b) => b.type === 'text');
       const graph = JSON.parse(block.text);
-      const nodes = (graph.nodes || []).slice(0, 8).map((n) =>
+      const nodes = (graph.nodes || []).slice(0, 12).map((n) =>
         Object.assign({ type: n.type, text: n.text }, styleFor(n.type)));
       const edges = (graph.edges || []).slice(0, Math.max(0, nodes.length - 1));
       if (!nodes.length) throw new Error('empty');

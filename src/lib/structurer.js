@@ -4,6 +4,8 @@
 //   ClaudeStructurer    — Claude API (direct browser access, structured JSON);
 //                         used when an API key is configured, falls back to
 //                         the heuristic on any failure.
+import { isQuestionish, hasPastAction, splitRunOn } from './linguistics.js';
+
 const TEAL = '#1F8A96', CLAY = '#E0824E';
 const KEY_STORAGE = 'napkiln-anthropic-key';
 const NODE_TYPES = ['PROBLEM', 'CONTEXT', 'OPPORTUNITY', 'IDEA', 'CONSTRAINT', 'OPEN QUESTION', 'EVENT'];
@@ -128,10 +130,10 @@ function classify(seg, connective) {
   // "what if…" is napkiln's signature opportunity phrasing — it wins over the
   // question-mark rule even when spoken as a question
   if (/^(what if|imagine|wouldn'?t it be)\b/.test(s)) return 'OPPORTUNITY';
-  if (/^(i wonder|how (do|would|could|can|should)|should i|do i|is (it|there)|are there|why )/.test(s) || /\?\s*$/.test(s)) return 'OPEN QUESTION';
+  if (/^(i wonder|how (do|would|could|can|should)|should i|do i|is (it|there)|are there|why )/.test(s) || /\?\s*$/.test(s) || isQuestionish(s)) return 'OPEN QUESTION';
   if (/\b(problem|issue|annoying|frustrat\w*|pain(ful)?|struggle|never (listen|open|look|go back)|go(es)? unheard|doesn'?t work|hate|hard to)\b/.test(s)) return 'PROBLEM';
   if (/\b(rigid|can'?t|cannot|won'?t work|limitation|constraint|the catch|too (hard|slow|clunky|expensive|rigid)|feels? (rigid|forced|wrong|clunky))\b/.test(s)) return 'CONSTRAINT';
-  if (NARRATIVE_CONNECTIVES.has(connective) || PAST_NARRATIVE.test(s) || TIME_OPENER.test(s)) return 'EVENT';
+  if (NARRATIVE_CONNECTIVES.has(connective) || PAST_NARRATIVE.test(s) || TIME_OPENER.test(s) || hasPastAction(s)) return 'EVENT';
   if (/\b(what if|imagine|we could|i could|could be|maybe (we|i|it)|opportunity|the idea is|it would be (cool|great|nice)|visuali[sz]e|wouldn'?t it be)\b/.test(s)) return 'OPPORTUNITY';
   if (/^(when(ever)?|while|usually|normally|lately|every time|i keep|i always|i often|these days|context)\b/.test(s)) return 'CONTEXT';
   if (connective === 'but') return 'CONSTRAINT'; // contrastive beat with no stronger signal

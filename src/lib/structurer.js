@@ -22,17 +22,32 @@ const cleanText = (s) => s.replace(FILLERS, ' ').replace(/\s+/g, ' ').trim();
 // Also used by the review screen to compress re-recorded box text.
 export function summarizeClause(seg) { return summarize(seg); }
 
-function summarize(seg) {
+const HEDGES = /\b(maybe|probably|possibly|just|really|very|honestly|definitely|pretty much|i mean|i think|i guess)\b/gi;
+
+function summarize(seg, cap = 9, minimal = false) {
   let t = cleanText(seg)
     .replace(/^((and|but|so|then|also|well|okay|ok|alright|yeah|right|like)\s+)+/i, '')
     .replace(/^(the (thing|problem|issue) is( that)?|i (think|guess|feel like)( that)?|it('s| is) (like|that))\s+/i, '');
+  if (minimal) t = t.replace(HEDGES, ' ').replace(/\s+/g, ' ').trim();
   const isQ = /\?\s*$/.test(t);
   t = t.replace(/[.,;!?]+\s*$/, '').replace(/\s+(and|or|but|so)\s*$/i, '');
-  const words = t.split(' ');
-  if (words.length > 9) t = words.slice(0, 9).join(' ') + '…';
+  const words = t.split(' ').filter(Boolean);
+  if (words.length > cap) t = words.slice(0, cap).join(' ') + '…';
+  else t = words.join(' ');
   t = t.charAt(0).toLowerCase() + t.slice(1);
   return t + (isQ ? '?' : '');
 }
+
+// Bare-minimum mode for the focused templates: only these box types survive,
+// hard-capped and tersely worded. Free flow and Sequence keep full detail —
+// a story needs its beats.
+const MINIMAL_TYPES = {
+  'Problem → Solution': ['PROBLEM', 'OPPORTUNITY', 'CONSTRAINT', 'OPEN QUESTION'],
+  'Weighing options': ['OPPORTUNITY', 'IDEA', 'CONSTRAINT'],
+  'Around a question': ['OPEN QUESTION', 'OPPORTUNITY', 'IDEA'],
+};
+const MINIMAL_CAP = 5;      // boxes
+const MINIMAL_WORDS = 5;    // words per box
 
 // ---------------------------------------------------------------------------
 // Discourse-driven segmentation. Speech transcripts arrive largely
@@ -169,30 +184,46 @@ function edgeLabel(prevType, nextType) {
 
 export class HeuristicStructurer {
   constructor() { this.engine = neuralEnabled() ? 'on-device neural' : 'on-device'; }
-  async structure(transcript) {
-    const nodes = [], edges = [], seen = new Set();
+  async structure(transcript, opts) {
+    const minimalTypes = (opts && opts.template && MINIMAL_TYPES[opts.template]) || null;
+    const seen = new Set(), cand = [];
     // Cut the fluff: meta-talk clauses always; semantically unrelated asides
     // when the neural boost is on
     let clauses = segmentClauses(scrubFluff(transcript)).filter((c) => !isFluff(c.text));
     clauses = await filterUnrelated(clauses);
-    for (const clause of clauses) {
+    for (let ci = 0; ci < clauses.length; ci++) {
+      const clause = clauses[ci];
       let type = classify(clause.text, clause.connective);
       // IDEA is the fall-through bucket — let the neural boost (when enabled)
       // take a semantic second look at clauses the rules couldn't type
       if (type === 'IDEA') type = await refineType(clause.text, type);
-      const text = summarize(clause.text);
+      const text = summarize(clause.text, minimalTypes ? MINIMAL_WORDS : 9, !!minimalTypes);
       const key = type + '|' + text;
       // Dedupe repeated clauses (re-transcription loops) — but a narrative
       // connective means the speaker said it happened *again*, so keep it:
       // "this happened and then this happened" is two boxes.
       if (!text || (seen.has(key) && !NARRATIVE_CONNECTIVES.has(clause.connective))) continue;
       seen.add(key);
-      if (nodes.length) {
-        edges.push({ label: clause.connective || edgeLabel(nodes[nodes.length - 1].type, type) });
-      }
-      nodes.push(Object.assign({ type, text }, styleFor(type)));
-      if (nodes.length >= 8) break;
+      cand.push({ type, text, connective: clause.connective, ci });
+      if (cand.length >= (minimalTypes ? 12 : 8)) break;
     }
+    let kept = cand;
+    if (minimalTypes) {
+      const filtered = cand.filter((c) => minimalTypes.includes(c.type));
+      // never empty the thought — if the template's types barely appear,
+      // keep everything (still tersely worded) rather than show nothing
+      if (filtered.length >= 2) kept = filtered;
+      kept = kept.slice(0, MINIMAL_CAP);
+    }
+    const nodes = [], edges = [];
+    kept.forEach((c, i) => {
+      if (i) {
+        // a spoken connective only holds if the previous clause survived
+        const adjacent = c.ci === kept[i - 1].ci + 1;
+        edges.push({ label: (adjacent && c.connective) || edgeLabel(kept[i - 1].type, c.type) });
+      }
+      nodes.push(Object.assign({ type: c.type, text: c.text }, styleFor(c.type)));
+    });
     return { nodes, edges, engine: this.engine };
   }
 }
@@ -272,6 +303,11 @@ export class ClaudeStructurer {
           messages: [{
             role: 'user',
             content: (opts && opts.template ? 'Structure template: ' + opts.template + '\n\n' : '') +
+              (opts && opts.template && MINIMAL_TYPES[opts.template]
+                ? 'Keep the bare minimum: at most ' + MINIMAL_CAP + ' boxes of only the types ' +
+                  MINIMAL_TYPES[opts.template].join(', ') + ', each compressed to ' + MINIMAL_WORDS +
+                  ' words or fewer — drop hedges, asides, and every clause that does not fit those types.\n\n'
+                : '') +
               'Transcript so far:\n' + transcript,
           }],
         }),

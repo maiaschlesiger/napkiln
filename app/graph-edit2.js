@@ -24,11 +24,17 @@
         { type: 'CONSTRAINT', c: CLAY, text: 'mind maps feel rigid', solid: true },
         { type: 'OPEN QUESTION', c: CLAY, text: 'thoughts containing smaller thoughts?', solid: false },
       ];
+      // A live-structured graph (set as a property before mounting) replaces the demo nodes
+      if (this.graph && this.graph.nodes && this.graph.nodes.length) {
+        this.nodes = this.graph.nodes.map(n => ({ type: n.type, c: n.c || TEAL, text: n.text, solid: n.solid !== false }));
+        this._edges = this.graph.edges || [];
+        this._dynamic = true;
+      }
       this.focus = -1; this.editing = -1; this.listening = -1;
       this.folder = 'Product ideas'; this.ddOpen = false;
       this.preview = this.getAttribute('mode') === 'preview';
       this.stage = this.getAttribute('stage') === 'saved' ? 'saved' : 'review';
-      this.title = 'Ideas while moving'; this.desc = this.getAttribute('stage') === 'saved' ? 'an app for people whose ideas arrive mid-walk' : '';
+      this.title = (this.graph && this.graph.title) || 'Ideas while moving'; this.desc = this.getAttribute('stage') === 'saved' ? 'an app for people whose ideas arrive mid-walk' : '';
       Object.assign(this.style, { display: 'block', position: 'absolute', inset: '0', fontFamily: SANS, background: '#F0EFEC', overflow: 'hidden' });
       this.render();
     }
@@ -88,6 +94,17 @@
     graphHtml() {
       const focusOn = this.focus >= 0;
       const v = (i) => !this.nodes[i].hidden;
+      if (this._dynamic) {
+        // Live-structured graphs render as a vertical chain with edge labels
+        let h = '<div style="display:flex;flex-direction:column;align-items:center">', prev = -1;
+        this.nodes.forEach((n, i) => {
+          if (n.hidden) return;
+          if (prev >= 0) h += this.conn((this._edges[i - 1] && this._edges[i - 1].label) || '·');
+          h += this.box(i);
+          prev = i;
+        });
+        return h + '</div>';
+      }
       const dash = '<span style="width:26px;height:0;border-top:1px dashed rgba(31,138,150,.5);flex:none;' + (focusOn ? 'opacity:.35;' : '') + '"></span>';
       const parts = [];
       if (v(0)) parts.push({ conn: null, html: this.box(0) });
@@ -173,7 +190,7 @@
             this.listening = i; this.editing = -1; this.renderGraph();
             setTimeout(() => {
               if (this.listening !== i) return;
-              this.nodes[i].text = RERECORD[i];
+              this.nodes[i].text = RERECORD[i % RERECORD.length];
               this.listening = -1; this.focus = -1; this.renderGraph();
               this.snack('Box re-recorded');
             }, 1900);
@@ -206,7 +223,7 @@
             this.listening = i; this.editing = -1; this.renderGraph();
             setTimeout(() => {
               if (this.listening !== i) return;
-              this.nodes[i].text = RERECORD[i];
+              this.nodes[i].text = RERECORD[i % RERECORD.length];
               this.listening = -1; this.focus = -1; this.renderGraph();
               this.snack('Box re-recorded');
             }, 1900);

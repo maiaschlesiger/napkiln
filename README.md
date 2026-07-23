@@ -30,6 +30,32 @@ python3 -m http.server 8000
 An internet connection is only used to pull the Figtree / Newsreader webfonts;
 without it the app falls back to the system sans-serif and works the same.
 
+## The AI behind it
+
+Recording is now genuinely live: your speech (or typing) is auto-structured
+into the thought graph as you go, and the result flows into review → save →
+Space. Two engines sit behind one interface (`app/ai/structurer.js`):
+
+- **On-device (default, no setup)** — a zero-dependency heuristic engine that
+  segments the transcript on discourse markers and classifies each clause into
+  PROBLEM / CONTEXT / OPPORTUNITY / IDEA / CONSTRAINT / OPEN QUESTION, with
+  labeled connections ("led to", "but", "raises", "so") between consecutive
+  boxes.
+- **Claude** — tap the `listening · on-device` status pill on the recording
+  screen and paste an Anthropic API key (stored in `localStorage` only). The
+  transcript is then structured by `claude-opus-4-8` using the API's
+  structured-output JSON schema, called directly from the browser
+  (`anthropic-dangerous-direct-browser-access`). Any failure falls back to the
+  on-device engine, so the app never stalls mid-thought.
+
+Speech-to-text uses the browser's Web Speech API (`app/ai/speech.js`) with
+auto-restart and pause/resume; where speech recognition is unavailable or
+denied, the recording screen switches to typed input ("or type instead" on the
+capture screen goes straight there). The structure template chosen on the
+capture screen (problem→solution, sequence, …) is passed to the structurer as
+a hint. Appending `?demo` to the URL restores the original scripted recording
+from exploration 5a.
+
 ## What you can do
 
 - **Onboard** — a three-step intro (skippable), then microphone priming.
@@ -55,6 +81,8 @@ without it the app falls back to the system sans-serif and works the same.
 | `app/capture-start.js` | `<napkiln-capture-start>` — the resting capture screen with the structure picker. |
 | `app/graph-edit2.js` | `<napkiln-graph-edit2>` — the review / preview thought graph and save sheet. |
 | `app/space-map.js` | `<napkiln-space>` — the zoomable Space constellation and "why these connect" popup. |
+| `app/ai/structurer.js` | The auto-structuring engines: on-device heuristic + Claude (structured JSON output). |
+| `app/ai/speech.js` | Web Speech API wrapper — rolling transcript, interim results, pause/resume. |
 
 Each screen is a self-contained custom element; they coordinate purely through
 bubbling `CustomEvent`s (`nk-record`, `nk-saved`, `nk-space`, `nk-open`,

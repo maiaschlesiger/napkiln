@@ -66,7 +66,8 @@
         const t = e.target.closest('[data-tab]');
         if (t) this.go(t.getAttribute('data-tab'));
       });
-      this.addEventListener('nk-record', () => { this.recordFolder = null; this.go('record'); });
+      this.addEventListener('nk-record', () => { this.recordFolder = null; this.typedMode = false; this.go('record'); });
+      this.addEventListener('nk-type', () => { this.recordFolder = null; this.typedMode = true; this.go('record'); });
       this.addEventListener('nk-talk', () => { this.recordFolder = null; this.go('record'); });
       this.addEventListener('nk-space', () => this.go('space'));
       this.addEventListener('nk-saved', () => {
@@ -156,6 +157,7 @@
       el.animate([{ opacity: 0, transform: 'translateX(' + (-dx) + 'px)' }, { opacity: 1, transform: 'translateX(0)' }], { duration: 260, easing: 'cubic-bezier(.3,.8,.4,1)' });
     }
     go(s, noPush) {
+      if (this._speechCap && s !== 'record') { this._speechCap.stop(); this._speechCap = null; }
       if (!noPush && this._cur && this._cur !== s) (this._hist = this._hist || []).push(this._cur);
       this._cur = s;
       if (s === 'record' || s === 'review') {
@@ -168,6 +170,11 @@
       } else if (s === 'record') {
         this.renderRecord(); this.tabs(null);
       } else if (s === 'review') {
+        if (this._pendingGraph) {
+          this._review = document.createElement('napkiln-graph-edit2');
+          this._review.graph = this._pendingGraph;
+          this._pendingGraph = null;
+        }
         if (!this._review) this._review = document.createElement('napkiln-graph-edit2');
         this.mount(this._review); this.tabs(null);
       } else if (s === 'space') {
@@ -183,6 +190,156 @@
       }
     }
     renderRecord() {
+      // Live AI structuring by default; ?demo keeps exploration 5a's scripted recording
+      if (/[?&]demo\b/.test(location.search) || !window.NapkilnAI) { this.renderRecordDemo(); return; }
+      this.renderRecordLive();
+    }
+    renderRecordLive() {
+      const AI = window.NapkilnAI;
+      const speechOK = AI.SpeechCapture && AI.SpeechCapture.available();
+      let typed = this.typedMode || !speechOK;
+      let structurer = AI.createStructurer();
+      const tpl = this._home && this._home.sel && this._home.sel !== 'free'
+        ? { ps: 'Problem → Solution', seq: 'Sequence', cmp: 'Weighing options', q: 'Around a question' }[this._home.sel] : null;
+      const state = { transcript: '', interim: '', nodes: [], edges: [] };
+      const d = document.createElement('div');
+      d.style.cssText = 'position:absolute;inset:0';
+      const engineLabel = () => structurer.engine === 'Claude' ? 'Claude' : 'on-device';
+      d.innerHTML =
+        '<div style="position:absolute;top:74px;left:0;right:0;display:flex;justify-content:space-between;align-items:center;padding:0 24px">' +
+        '<span style="font:600 15px ' + SANS + ';letter-spacing:-.01em;color:' + INK + '">napkiln</span>' +
+        '<span class="nk-status" title="tap to change AI engine" style="display:flex;align-items:center;gap:6px;font:500 11px ' + SANS + ';color:' + TEAL + ';cursor:pointer"><span style="width:6px;height:6px;border-radius:50%;background:' + TEAL + ';animation:breathe 2s ease-in-out infinite"></span>' + (typed ? 'typing' : 'listening') + ' · ' + engineLabel() + '</span></div>' +
+        (this.recordFolder ? '<div style="position:absolute;top:104px;left:0;right:0;text-align:center;font:400 12px ' + SANS + ';color:rgba(60,66,73,.45)">adding to <span style="color:' + TEAL + ';font-weight:500">' + this.recordFolder.toLowerCase() + '</span></div>' : '') +
+        (tpl ? '<div style="position:absolute;top:' + (this.recordFolder ? 122 : 104) + 'px;left:0;right:0;text-align:center;font:400 11px ' + SANS + ';color:rgba(60,66,73,.35)">shape: ' + tpl.toLowerCase() + '</div>' : '') +
+        '<div class="nk-livegraph" style="position:absolute;top:140px;bottom:' + (typed ? 270 : 235) + 'px;left:24px;right:24px;overflow-y:auto;display:flex;flex-direction:column;align-items:center;gap:0"></div>' +
+        (typed
+          ? '<textarea class="nk-typebox" placeholder="Type your thought — napkiln structures as you go…" style="position:absolute;bottom:135px;left:24px;right:24px;height:112px;box-sizing:border-box;resize:none;border:1px solid rgba(60,66,73,.15);border-radius:14px;background:rgba(255,255,255,.75);padding:12px 14px;outline:none;font:400 13.5px/1.5 ' + SANS + ';color:' + INK + '"></textarea>'
+          : '<div class="nk-transcript" style="position:absolute;bottom:160px;left:40px;right:40px;max-height:64px;overflow:hidden;text-align:center;font:400 15px/1.5 ' + SERIF + ';color:rgba(60,66,73,.45)"></div>' +
+            '<div style="position:absolute;bottom:130px;left:0;right:0;display:flex;justify-content:center;align-items:flex-end;gap:3px;height:16px" class="nk-eq">' +
+            [1, .8, 1.15, .9, 1.05].map((t, i) => '<span style="width:3px;height:14px;border-radius:2px;background:' + TEAL + ';animation:eq ' + t + 's ease-in-out ' + (i * 0.12) + 's infinite;transform-origin:bottom"></span>').join('') + '</div>') +
+        '<div style="position:absolute;bottom:56px;left:0;right:0;display:flex;justify-content:center;align-items:center;gap:14px">' +
+        '<button class="nk-rcancel" style="height:56px;padding:0 20px;border-radius:28px;border:1px solid rgba(60,66,73,.2);background:none;font:500 14px ' + SANS + ';color:rgba(60,66,73,.6);cursor:pointer">Cancel</button>' +
+        (typed ? '' : '<button class="nk-pause" style="width:56px;height:56px;border-radius:50%;border:1px solid rgba(60,66,73,.18);background:rgba(255,255,255,.6);display:flex;align-items:center;justify-content:center;cursor:pointer"><span class="nk-pi" style="display:flex;gap:5px"><span style="width:4px;height:16px;border-radius:2px;background:' + INK + '"></span><span style="width:4px;height:16px;border-radius:2px;background:' + INK + '"></span></span></button>') +
+        '<button class="nk-done" style="height:56px;padding:0 30px;border-radius:28px;border:none;background:' + INK + ';color:#F0EFEC;font:500 16px ' + SANS + ';cursor:pointer">Done</button></div>';
+      const graphEl = d.querySelector('.nk-livegraph');
+      const emptyHint = () => {
+        graphEl.innerHTML = '<div style="margin:auto;display:flex;flex-direction:column;align-items:center;gap:16px">' +
+          '<span style="position:relative;width:90px;height:90px">' +
+          '<span style="position:absolute;inset:-16px;border-radius:50%;background:radial-gradient(circle,rgba(31,138,150,.13) 0%,rgba(31,138,150,0) 68%);animation:breathe 3.6s ease-in-out infinite"></span>' +
+          '<span style="position:absolute;inset:8px;background:linear-gradient(150deg,rgba(31,138,150,.3),rgba(31,138,150,.1));animation:blobB 6s ease-in-out infinite"></span>' +
+          '<span style="position:absolute;inset:16px;background:linear-gradient(320deg,#4FA3AE,#177B83);animation:blobA 4.5s ease-in-out infinite"></span></span>' +
+          '<span style="font:400 12px ' + SANS + ';color:rgba(60,66,73,.45)">' + (typed ? 'start typing — the structure builds as you go' : 'start talking — napkiln structures quietly') + '</span></div>';
+      };
+      emptyHint();
+      const renderGraph = (prevCount) => {
+        if (!state.nodes.length) { emptyHint(); return; }
+        let h = '';
+        state.nodes.forEach((n, i) => {
+          const fresh = i >= prevCount;
+          if (i > 0) {
+            const label = (state.edges[i - 1] && state.edges[i - 1].label) || '·';
+            h += '<span style="position:relative;width:1px;height:22px;flex:none;background:rgba(31,138,150,.45);' + (fresh ? 'animation:buildin .5s ease-out both;' : '') + '"><span style="position:absolute;left:9px;top:4px;font:400 11.5px ' + SANS + ';color:' + TEAL + ';white-space:nowrap">' + label + '</span></span>';
+          }
+          h += '<div style="flex:none;display:flex;flex-direction:column;align-items:center;gap:3px;background:rgba(255,255,255,' + (n.solid ? '.65' : '.4') + ');border:1px ' + (n.solid ? 'solid rgba(60,66,73,.12)' : 'dashed rgba(224,130,78,.5)') + ';border-radius:12px;padding:10px 20px;max-width:280px;' + (fresh ? 'animation:buildin .6s ease-out both;' : '') + '">' +
+            '<span style="font:600 11px ui-monospace,Menlo,monospace;letter-spacing:.14em;color:' + n.c + '">' + n.type + '</span>' +
+            '<span style="font:400 14px ' + SERIF + ';color:' + INK + ';text-align:center">' + n.text + '</span></div>';
+        });
+        graphEl.innerHTML = h;
+        graphEl.scrollTop = graphEl.scrollHeight;
+      };
+      const delay = () => structurer.engine === 'Claude' ? 1200 : 350;
+      let timer = null, busy = false, dirty = false;
+      const run = async () => {
+        if (busy) { dirty = true; return; }
+        busy = true;
+        const text = (state.transcript + ' ' + state.interim).trim();
+        if (text) {
+          const g = await structurer.structure(text, { template: tpl });
+          if (d.isConnected) {
+            const prev = state.nodes.length;
+            state.nodes = g.nodes; state.edges = g.edges;
+            renderGraph(prev);
+          }
+        } else if (d.isConnected) { state.nodes = []; state.edges = []; emptyHint(); }
+        busy = false;
+        if (dirty) { dirty = false; timer = setTimeout(run, delay()); }
+      };
+      const schedule = () => { clearTimeout(timer); timer = setTimeout(run, delay()); };
+      if (typed) {
+        const box = d.querySelector('.nk-typebox');
+        box.addEventListener('input', () => { state.transcript = box.value; schedule(); });
+        setTimeout(() => box.focus(), 300);
+      } else {
+        const strip = d.querySelector('.nk-transcript');
+        this._speechCap = new AI.SpeechCapture();
+        const ok = this._speechCap.start((final, interim) => {
+          state.transcript = final; state.interim = interim;
+          const tail = (final + ' ' + interim).trim();
+          strip.innerHTML = tail.length > 110 ? '…' + tail.slice(-110) : tail;
+          schedule();
+        }, (st) => {
+          if (st === 'denied' && d.isConnected) { this.typedMode = true; this.renderRecordLive(); }
+        });
+        if (!ok) { this.typedMode = true; this.renderRecordLive(); return; }
+      }
+      d.querySelector('.nk-status').addEventListener('click', () => {
+        const cur = AI.getApiKey();
+        const v = prompt('napkiln AI engine\n\nPaste an Anthropic API key to structure with Claude (claude-opus-4-8), or clear to use the on-device engine.', cur || '');
+        if (v === null) return;
+        AI.setApiKey(v.trim());
+        structurer = AI.createStructurer();
+        const s = d.querySelector('.nk-status');
+        s.innerHTML = '<span style="width:6px;height:6px;border-radius:50%;background:' + TEAL + ';animation:breathe 2s ease-in-out infinite"></span>' + (typed ? 'typing' : 'listening') + ' · ' + engineLabel();
+        schedule();
+      });
+      d.querySelector('.nk-done').addEventListener('click', () => {
+        clearTimeout(timer);
+        if (this._speechCap) { this._speechCap.stop(); this._speechCap = null; }
+        if (state.nodes.length) {
+          const t = state.nodes.find(n => n.type === 'OPPORTUNITY' || n.type === 'IDEA') || state.nodes[0];
+          let title = t.text.replace(/[?.]$/, '');
+          if (title.length > 34) title = title.slice(0, 34).replace(/\s\S*$/, '') + '…';
+          this._pendingGraph = { nodes: state.nodes, edges: state.edges, title: title.charAt(0).toUpperCase() + title.slice(1) };
+          this._review = null;
+        }
+        this.recordFolder = null; this.go('review');
+      });
+      const pauseBtn = d.querySelector('.nk-pause');
+      if (pauseBtn) {
+        let paused = false;
+        pauseBtn.addEventListener('click', () => {
+          paused = !paused;
+          if (this._speechCap) paused ? this._speechCap.pause() : this._speechCap.resume();
+          pauseBtn.querySelector('.nk-pi').innerHTML = paused
+            ? '<span style="width:0;height:0;border-top:9px solid transparent;border-bottom:9px solid transparent;border-left:14px solid ' + INK + ';margin-left:3px"></span>'
+            : '<span style="width:4px;height:16px;border-radius:2px;background:' + INK + '"></span><span style="width:4px;height:16px;border-radius:2px;background:' + INK + '"></span>';
+          const st = d.querySelector('.nk-status');
+          st.innerHTML = paused
+            ? '<span style="width:6px;height:6px;border-radius:50%;background:rgba(60,66,73,.4)"></span>paused'
+            : '<span style="width:6px;height:6px;border-radius:50%;background:' + TEAL + ';animation:breathe 2s ease-in-out infinite"></span>listening · ' + engineLabel();
+        });
+      }
+      d.querySelector('.nk-rcancel').addEventListener('click', () => {
+        const ov = document.createElement('div');
+        ov.style.cssText = 'position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:rgba(60,66,73,.3);padding:0 32px';
+        ov.innerHTML = '<div style="background:#FFFFFF;border-radius:18px;box-shadow:0 14px 40px rgba(60,66,73,.25);padding:22px 22px 18px;width:100%;box-sizing:border-box">' +
+          '<div style="font:500 15px ' + SANS + ';color:' + INK + ';margin-bottom:6px">Discard this recording?</div>' +
+          '<div style="font:400 12.5px/1.5 ' + SANS + ';color:rgba(60,66,73,.6);margin-bottom:16px">Nothing will be saved.</div>' +
+          '<div style="display:flex;gap:10px;justify-content:flex-end">' +
+          '<button data-c="cancel" style="height:42px;padding:0 18px;border-radius:21px;border:1px solid rgba(60,66,73,.18);background:none;font:500 13px ' + SANS + ';color:' + INK + ';cursor:pointer">Keep going</button>' +
+          '<button data-c="del" style="height:42px;padding:0 20px;border-radius:21px;border:none;background:' + CLAY + ';color:#F0EFEC;font:500 13px ' + SANS + ';cursor:pointer">Discard</button></div></div>';
+        ov.addEventListener('click', (e2) => {
+          if (e2.target.closest('[data-c="del"]')) {
+            clearTimeout(timer);
+            if (this._speechCap) { this._speechCap.stop(); this._speechCap = null; }
+            ov.remove(); this.recordFolder = null; this.goBack();
+          } else if (e2.target.closest('[data-c="cancel"]') || e2.target === ov) ov.remove();
+        });
+        this.appendChild(ov);
+      });
+      this.mount(d);
+    }
+    renderRecordDemo() {
       const boxRow = (type, color, text, delay, dashed) =>
         '<div style="display:flex;flex-direction:column;align-items:center;gap:3px;background:rgba(255,255,255,' + (dashed ? '.4' : '.65') + ');border:1px ' + (dashed ? 'dashed rgba(224,130,78,.5)' : 'solid rgba(60,66,73,.12)') + ';border-radius:12px;padding:10px 24px;animation:buildin .7s ease-out ' + delay + 's both">' +
         '<span style="font:600 11px ui-monospace,Menlo,monospace;letter-spacing:.14em;color:' + color + '">' + type + '</span>' +

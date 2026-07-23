@@ -55,6 +55,8 @@
         setTimeout(() => { this._orb.style.transform = 'translateX(-50%) scale(1)'; }, 160);
         setTimeout(() => this.dispatchEvent(new CustomEvent('nk-record', { bubbles: true })), 180);
       });
+      const typeLink = this.querySelector('.cs-type span');
+      if (typeLink) typeLink.addEventListener('click', () => this.dispatchEvent(new CustomEvent('nk-type', { bubbles: true })));
       if (this.hasAttribute('embedded')) {
         const r = this.querySelector('.cs-recent'); if (r) r.style.bottom = '134px';
         const t = this.querySelector('.cs-type'); if (t) t.style.bottom = '196px';

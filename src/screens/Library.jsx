@@ -2,7 +2,68 @@
 // Long-press (or right-click) a folder card or thought row → edit / delete.
 import { useRef, useState } from 'react';
 import { INK, TEAL, TEAL_DEEP, CLAY, PAPER, dim, teal, sans, mono, abs } from '../theme.js';
-import { Confirm, SearchBar, TrashIcon, RoundBtn } from '../components/ui.jsx';
+import { Confirm, TrashIcon, RoundBtn } from '../components/ui.jsx';
+
+// Live search across every thought. Matches pop up below the bar: direct hits
+// first, then related thoughts that share words with the query.
+function SearchBox({ thoughts, onPick }) {
+  const [q, setQ] = useState('');
+  const query = q.trim().toLowerCase();
+  const exact = [], similar = [];
+  if (query) {
+    const qTokens = query.split(/\s+/).filter((w) => w.length > 2);
+    for (const t of thoughts) {
+      const hay = (t.title + ' ' + t.meta).toLowerCase();
+      if (hay.includes(query)) exact.push(t);
+      else {
+        const score = qTokens.filter((w) => hay.includes(w)).length;
+        if (score > 0) similar.push({ ...t, score });
+      }
+    }
+    similar.sort((a, b) => b.score - a.score);
+  }
+  const row = (t, i, last) => (
+    <div
+      key={t.folder + t.title} data-sr={t.title}
+      onClick={() => { setQ(''); onPick(t.title); }}
+      style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px', borderBottom: last ? 'none' : `1px solid ${dim(.08)}`, cursor: 'pointer' }}
+    >
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: t.c, flex: 'none' }} />
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', ...sans(500, 13.5, INK), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title}</span>
+        <span style={{ ...sans(400, 11, dim(.45)) }}>{t.meta}</span>
+      </span>
+      <span style={{ flex: 'none', fontFamily: 'ui-monospace,Menlo,monospace', fontWeight: 500, fontSize: 9, letterSpacing: '.08em', color: dim(.45) }}>{t.folder.split(' ')[0]}</span>
+    </div>
+  );
+  return (
+    <div style={{ position: 'relative', margin: '0 24px', flex: 'none', zIndex: 6 }}>
+      <div style={{ height: 44, borderRadius: 22, background: 'rgba(255,255,255,.75)', border: `1px solid ${query ? teal(.4) : dim(.1)}`, display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px' }}>
+        <span style={{ width: 13, height: 13, borderRadius: '50%', border: `2px solid ${dim(.3)}`, position: 'relative', flex: 'none' }}>
+          <span style={{ position: 'absolute', right: -5, bottom: -3, width: 7, height: 2, background: dim(.3), transform: 'rotate(45deg)', borderRadius: 1 }} />
+        </span>
+        <input
+          className="nk-search" type="search" value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="Search every thought…"
+          style={{ flex: 1, border: 'none', background: 'none', outline: 'none', ...sans(400, 13.5, INK) }}
+        />
+        {query && <span onClick={() => setQ('')} style={{ ...sans(400, 13, dim(.4)), cursor: 'pointer', padding: '0 2px' }}>✕</span>}
+      </div>
+      {query && (
+        <div className="nk-searchpop" style={{ position: 'absolute', top: 50, left: 0, right: 0, background: '#FFF', border: `1px solid ${dim(.1)}`, borderRadius: 14, boxShadow: `0 10px 30px ${dim(.15)}`, maxHeight: 300, overflowY: 'auto' }}>
+          {exact.length === 0 && similar.length === 0 && (
+            <div style={{ padding: '12px 14px', ...sans(400, 12.5, dim(.5)) }}>Nothing matches yet — keep typing.</div>
+          )}
+          {exact.slice(0, 4).map((t, i) => row(t, i, i === Math.min(exact.length, 4) - 1 && !similar.length))}
+          {similar.length > 0 && (
+            <div style={{ ...mono(9, dim(.4)), padding: '10px 14px 2px' }}>SIMILAR THOUGHTS</div>
+          )}
+          {similar.slice(0, 3).map((t, i) => row(t, i, i === Math.min(similar.length, 3) - 1))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ThoughtRow({ title, meta, tag, tagC, tagBg, last, state, onOpen, onFocus, onCommit, onBubble }) {
   const holdRef = useRef(null);
@@ -45,6 +106,9 @@ function ThoughtRow({ title, meta, tag, tagC, tagBg, last, state, onOpen, onFocu
 
 export default function Library({ data, actions, onOpenThought, onRecordInFolder }) {
   const { folders, folderData, recent } = data;
+  const allThoughts = Object.entries(folderData)
+    .filter(([folder]) => folders.some((f) => f.label === folder))
+    .flatMap(([folder, f]) => f.items.map((it) => ({ title: it[0], meta: it[1], folder, c: f.c })));
   const [mode, setMode] = useState('folders');
   const [view, setView] = useState(null); // null = library, string = folder name
   const [fFocus, setFFocus] = useState(-1);
@@ -82,7 +146,7 @@ export default function Library({ data, actions, onOpenThought, onRecordInFolder
           </span>
         </div>
         <div style={{ ...abs({ top: 122, left: 0, right: 0, bottom: 126 }), display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <SearchBar />
+          <SearchBox thoughts={allThoughts} onPick={onOpenThought} />
           <div style={{ margin: '10px 24px 0', display: 'flex', flexDirection: 'column' }}>
             {f.items.map((it, i) => (
               <ThoughtRow
@@ -130,7 +194,7 @@ export default function Library({ data, actions, onOpenThought, onRecordInFolder
         </div>
       </div>
       <div style={{ ...abs({ top: 122, left: 0, right: 0, bottom: 126 }), display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-        {mode === 'folders' && <SearchBar />}
+        {mode === 'folders' && <SearchBox thoughts={allThoughts} onPick={onOpenThought} />}
         {mode === 'folders' ? (
           <div style={{ margin: '24px 24px 0', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, alignContent: 'start' }}>
             {folders.map((f, i) => {

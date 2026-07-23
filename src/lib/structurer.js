@@ -4,9 +4,11 @@
 //   ClaudeStructurer    — Claude API (direct browser access, structured JSON);
 //                         used when an API key is configured, falls back to
 //                         the heuristic on any failure.
+import { isQuestionish, hasPastAction, splitRunOn } from './linguistics.js';
+
 const TEAL = '#1F8A96', CLAY = '#E0824E';
 const KEY_STORAGE = 'napkiln-anthropic-key';
-const NODE_TYPES = ['PROBLEM', 'CONTEXT', 'OPPORTUNITY', 'IDEA', 'CONSTRAINT', 'OPEN QUESTION'];
+const NODE_TYPES = ['PROBLEM', 'CONTEXT', 'OPPORTUNITY', 'IDEA', 'CONSTRAINT', 'OPEN QUESTION', 'EVENT'];
 const styleFor = (type) => ({
   c: (type === 'CONSTRAINT' || type === 'OPEN QUESTION') ? CLAY : TEAL,
   solid: !(type === 'OPEN QUESTION' || type === 'CONTEXT'),
@@ -27,22 +29,122 @@ function summarize(seg) {
   return t + (isQ ? '?' : '');
 }
 
-function classify(seg) {
+// ---------------------------------------------------------------------------
+// Discourse-driven segmentation. Speech transcripts arrive largely
+// unpunctuated, so box boundaries can't rely on sentences — they follow how
+// the speaker talks: a new box begins where they move to a new beat, marked
+// by a connective ("and then", "but", "so", "because", …). The spoken
+// connective is kept and becomes the edge label into the new box, so
+// "this happened and then that happened" is two boxes joined by "then".
+// ---------------------------------------------------------------------------
+
+// [marker, edge label] — earliest occurrence wins; on a tie the longer marker
+// wins ("and then" beats "then", "but then" beats "but").
+const CONNECTIVES = [
+  ['and then', 'then'], ['but then', 'then'], ['so then', 'then'],
+  ['after that', 'after that'], ['afterwards', 'after that'],
+  ['on the other hand', 'but'], ['on top of that', 'also'],
+  ['which means', 'so'], ['which meant', 'so'],
+  ['however', 'but'], ['because', 'because'],
+  ['meanwhile', 'meanwhile'], ['eventually', 'eventually'], ['finally', 'finally'],
+  ['then', 'then'], ['but', 'but'], ['so', 'so'], ['also', 'also'],
+];
+// Question/idea openers also begin a new box, but the opener stays in the
+// clause (it carries the meaning: "I wonder who owns those spaces").
+const OPENERS = ['what if', "i wonder", "i'm wondering", 'the question is'];
+// Short or ambiguous markers split only when a clause-like continuation
+// follows, so idioms ("I think so", "could finally work") don't fragment.
+const GUARDED = new Set(['then', 'so', 'also', 'finally', 'eventually']);
+const NEXT_OK = /^(i|we|you|they|he|she|it|the|a|an|my|our|your|their|this|that|there|one|maybe|perhaps|suddenly|later|last|when|after|what)\b/i;
+const wordCount = (s) => cleanText(s).split(' ').filter(Boolean).length;
+
+function findSplit(text) {
+  let best = null;
+  const consider = (i, len, label, keep) => {
+    if (!best || i < best.index || (i === best.index && len > best.len)) {
+      best = { index: i, len, label, keep };
+    }
+  };
+  for (const [marker, label] of CONNECTIVES) {
+    const re = new RegExp('\\b' + marker + '\\b', 'ig');
+    let m;
+    while ((m = re.exec(text))) {
+      const i = m.index;
+      if (i === 0) continue; // a leading marker binds to this clause, handled by caller
+      const after = text.slice(i + m[0].length).replace(/^[\s,]+/, '');
+      if (GUARDED.has(marker) && !NEXT_OK.test(after)) continue;
+      if (wordCount(text.slice(0, i)) < 2 || wordCount(after) < 2) continue;
+      consider(i, m[0].length, label, false);
+      break; // only the earliest valid occurrence per marker matters
+    }
+  }
+  for (const opener of OPENERS) {
+    const re = new RegExp('\\b' + opener.replace("'", "'?") + '\\b', 'ig');
+    let m;
+    while ((m = re.exec(text))) {
+      const i = m.index;
+      if (i === 0) continue;
+      if (wordCount(text.slice(0, i)) < 2 || wordCount(text.slice(i)) < 3) continue;
+      consider(i, 0, null, true); // keep = split before, marker stays in clause
+      break;
+    }
+  }
+  return best;
+}
+
+// -> [{ text, connective }] where connective is the spoken word that opened
+//    this clause (null for the first clause of a breath)
+function segmentClauses(transcript) {
+  const clauses = [];
+  for (let sentence of transcript.split(/(?<=[.?!;])\s+|\n+/)) {
+    sentence = sentence.trim();
+    if (!sentence) continue;
+    let connective = null;
+    for (const [marker, label] of CONNECTIVES) {
+      const re = new RegExp('^' + marker + '\\b[,\\s]*', 'i');
+      if (re.test(sentence) && wordCount(sentence.replace(re, '')) >= 2) {
+        connective = label;
+        sentence = sentence.replace(re, '');
+        break;
+      }
+    }
+    let rest = sentence;
+    while (rest) {
+      const cut = findSplit(rest);
+      if (!cut) { clauses.push({ text: rest, connective }); break; }
+      clauses.push({ text: rest.slice(0, cut.index), connective });
+      connective = cut.label;
+      rest = rest.slice(cut.index + (cut.keep ? 0 : cut.len)).replace(/^[\s,]+/, '');
+    }
+  }
+  return clauses.filter((c) => wordCount(c.text) >= 2);
+}
+
+// Connectives that mark narrative progression — their clause is an EVENT.
+const NARRATIVE_CONNECTIVES = new Set(['then', 'after that', 'finally', 'eventually', 'meanwhile']);
+const PAST_NARRATIVE = /\b(happened|went|came|got|took|met|saw|heard|found|started|began|stopped|ended(?: up)?|woke|walked|drove|arrived|left|said|told|asked|tried|realized|decided|noticed|remembered|(?:was|were) \w+ing)\b/;
+const TIME_OPENER = /^(yesterday|today|earlier|last (night|week|month|year|time)|this (morning|afternoon|evening)|one (day|time)|the other day|a while (ago|back))\b/;
+
+function classify(seg, connective) {
   const s = cleanText(seg).toLowerCase();
   // "what if…" is napkiln's signature opportunity phrasing — it wins over the
   // question-mark rule even when spoken as a question
   if (/^(what if|imagine|wouldn'?t it be)\b/.test(s)) return 'OPPORTUNITY';
-  if (/^(i wonder|how (do|would|could|can|should)|should i|do i|is (it|there)|are there|why )/.test(s) || /\?\s*$/.test(s)) return 'OPEN QUESTION';
+  if (/^(i wonder|how (do|would|could|can|should)|should i|do i|is (it|there)|are there|why )/.test(s) || /\?\s*$/.test(s) || isQuestionish(s)) return 'OPEN QUESTION';
   if (/\b(problem|issue|annoying|frustrat\w*|pain(ful)?|struggle|never (listen|open|look|go back)|go(es)? unheard|doesn'?t work|hate|hard to)\b/.test(s)) return 'PROBLEM';
-  if (/^(but|however|though|except)\b/.test(s) || /\b(rigid|can'?t|cannot|won'?t work|limitation|constraint|the catch|too (hard|slow|clunky|expensive|rigid)|feels? (rigid|forced|wrong|clunky))\b/.test(s)) return 'CONSTRAINT';
+  if (/\b(rigid|can'?t|cannot|won'?t work|limitation|constraint|the catch|too (hard|slow|clunky|expensive|rigid)|feels? (rigid|forced|wrong|clunky))\b/.test(s)) return 'CONSTRAINT';
+  if (NARRATIVE_CONNECTIVES.has(connective) || PAST_NARRATIVE.test(s) || TIME_OPENER.test(s) || hasPastAction(s)) return 'EVENT';
   if (/\b(what if|imagine|we could|i could|could be|maybe (we|i|it)|opportunity|the idea is|it would be (cool|great|nice)|visuali[sz]e|wouldn'?t it be)\b/.test(s)) return 'OPPORTUNITY';
   if (/^(when(ever)?|while|usually|normally|lately|every time|i keep|i always|i often|these days|context)\b/.test(s)) return 'CONTEXT';
+  if (connective === 'but') return 'CONSTRAINT'; // contrastive beat with no stronger signal
   return 'IDEA';
 }
 
+// Fallback edge labels when the speaker didn't say a connective.
 function edgeLabel(prevType, nextType) {
   if (nextType === 'CONSTRAINT') return 'but';
   if (nextType === 'OPEN QUESTION') return 'raises';
+  if (nextType === 'EVENT' || prevType === 'EVENT') return 'then';
   if (prevType === 'PROBLEM') return 'led to';
   if (prevType === 'CONTEXT') return 'so';
   if (nextType === 'OPPORTUNITY') return 'so';
@@ -50,25 +152,22 @@ function edgeLabel(prevType, nextType) {
   return 'then';
 }
 
-function segment(transcript) {
-  return transcript
-    .split(/(?<=[.?!])\s+|\n+/)
-    .flatMap((s) => (s.length > 90 ? s.split(/,\s+(?=but\b|so\b|and then\b)|;\s+/) : [s]))
-    .map((s) => s.trim())
-    .filter((s) => cleanText(s).split(' ').filter(Boolean).length >= 3);
-}
-
 export class HeuristicStructurer {
   constructor() { this.engine = 'on-device'; }
   async structure(transcript) {
     const nodes = [], edges = [], seen = new Set();
-    for (const seg of segment(transcript)) {
-      const type = classify(seg);
-      const text = summarize(seg);
+    for (const clause of segmentClauses(transcript)) {
+      const type = classify(clause.text, clause.connective);
+      const text = summarize(clause.text);
       const key = type + '|' + text;
-      if (!text || seen.has(key)) continue;
+      // Dedupe repeated clauses (re-transcription loops) — but a narrative
+      // connective means the speaker said it happened *again*, so keep it:
+      // "this happened and then this happened" is two boxes.
+      if (!text || (seen.has(key) && !NARRATIVE_CONNECTIVES.has(clause.connective))) continue;
       seen.add(key);
-      if (nodes.length) edges.push({ label: edgeLabel(nodes[nodes.length - 1].type, type) });
+      if (nodes.length) {
+        edges.push({ label: clause.connective || edgeLabel(nodes[nodes.length - 1].type, type) });
+      }
       nodes.push(Object.assign({ type, text }, styleFor(type)));
       if (nodes.length >= 8) break;
     }
@@ -111,9 +210,16 @@ const GRAPH_SCHEMA = {
 
 const SYSTEM_PROMPT =
   'You structure a person\'s spoken, rambling thought into a small graph while they talk. ' +
-  'Extract 2-8 boxes, each typed as PROBLEM, CONTEXT, OPPORTUNITY, IDEA, CONSTRAINT, or OPEN QUESTION, ' +
-  'in the order the thought develops. Compress each box to at most 9 words, keeping the speaker\'s own ' +
-  'wording where possible. Connect consecutive boxes with a 1-2 word label ("led to", "but", "raises", "so"). ' +
+  'Follow the speaker\'s own discourse: begin a NEW box exactly where they move to a new beat — ' +
+  'a temporal shift ("and then", "after that", "eventually"), a contrast ("but", "however"), ' +
+  'a consequence ("so", "which means"), a cause ("because"), or a fresh question ("I wonder", "what if"). ' +
+  'A narrative like "this happened and then that happened" becomes separate EVENT boxes in speaking ' +
+  'order, joined by "then" — never merge distinct beats into one box, and never split a single beat. ' +
+  'Types: EVENT (something that happened or a step in a story), PROBLEM, CONTEXT, OPPORTUNITY, IDEA, ' +
+  'CONSTRAINT, OPEN QUESTION. Extract 2-8 boxes in the order the thought develops. ' +
+  'For each edge, use the connective word the speaker actually said ("then", "but", "so", "because", ' +
+  '"after that"); only fall back to an inferred label ("led to", "raises") when they said none. ' +
+  'Compress each box to at most 9 words, keeping the speaker\'s own wording where possible. ' +
   'Ignore filler words and false starts. If a structure template is named, prefer its box types. ' +
   'The transcript may be mid-sentence — structure what is there so far without inventing content.';
 

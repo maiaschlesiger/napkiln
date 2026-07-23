@@ -29,7 +29,7 @@ const GROUPS = [
 ];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-export default function Space({ flash, onOpen, onTalk }) {
+export default function Space({ flash, onOpen, onTalk, onSheet }) {
   const [z, setZ] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [nodes, setNodes] = useState(() => SPACE_NODES.map((n) => ({ ...n })));
@@ -49,6 +49,10 @@ export default function Space({ flash, onOpen, onTalk }) {
   const ztRef = useRef({ target: 1, raf: null });
 
   const say = (text) => setSnack({ text, at: Date.now() });
+
+  // The connections sheet covers the bottom of the screen — tuck the tab bar
+  // away while it's open (vanilla prototype's nk-sheet behavior)
+  useEffect(() => { if (onSheet) onSheet(listOpen); }, [listOpen]);
 
   useEffect(() => {
     if (flash == null || flash < 0) return;

@@ -18,6 +18,9 @@ const styleFor = (type) => ({
 const FILLERS = /\b(um+|uh+|erm|hmm|you know|i mean|sort of|kind of|kinda|basically|literally|actually)\b/gi;
 const cleanText = (s) => s.replace(FILLERS, ' ').replace(/\s+/g, ' ').trim();
 
+// Also used by the review screen to compress re-recorded box text.
+export function summarizeClause(seg) { return summarize(seg); }
+
 function summarize(seg) {
   let t = cleanText(seg)
     .replace(/^(and|but|so|then|also|well|okay|ok|yeah|like)\s+/i, '')

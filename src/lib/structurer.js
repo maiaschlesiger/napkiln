@@ -4,7 +4,7 @@
 //   ClaudeStructurer    — Claude API (direct browser access, structured JSON);
 //                         used when an API key is configured, falls back to
 //                         the heuristic on any failure.
-import { isQuestionish, hasPastAction, splitRunOn } from './linguistics.js';
+import { isQuestionish, hasPastAction, splitRunOn, topicOf } from './linguistics.js';
 import { refineType, neuralEnabled } from './semantic.js';
 import { isFluff, scrubFluff, filterUnrelated } from './salience.js';
 
@@ -20,7 +20,9 @@ const FILLERS = /\b(um+|uh+|erm|hmm|you know|i mean|sort of|kind of|kinda|basica
 const cleanText = (s) => s.replace(FILLERS, ' ').replace(/\s+/g, ' ').trim();
 
 // Also used by the review screen to compress re-recorded box text.
-export function summarizeClause(seg) { return summarize(seg); }
+// Boxes are 3-4 word topic labels: POS-driven extraction first, with the
+// word-cap summarizer as the safety net when no confident topic emerges.
+export function summarizeClause(seg) { return topicOf(seg) || summarize(seg, 4, true); }
 
 const HEDGES = /\b(maybe|probably|possibly|just|really|very|honestly|definitely|pretty much|i mean|i think|i guess)\b/gi;
 
@@ -47,7 +49,7 @@ const MINIMAL_TYPES = {
   'Around a question': ['OPEN QUESTION', 'OPPORTUNITY', 'IDEA'],
 };
 const MINIMAL_CAP = 5;      // boxes
-const MINIMAL_WORDS = 5;    // words per box
+const MINIMAL_WORDS = 4;    // words per box (fallback cap when no topic emerges)
 
 // ---------------------------------------------------------------------------
 // Discourse-driven segmentation. Speech transcripts arrive largely
@@ -197,7 +199,7 @@ export class HeuristicStructurer {
       // IDEA is the fall-through bucket — let the neural boost (when enabled)
       // take a semantic second look at clauses the rules couldn't type
       if (type === 'IDEA') type = await refineType(clause.text, type);
-      const text = summarize(clause.text, minimalTypes ? MINIMAL_WORDS : 9, !!minimalTypes);
+      const text = topicOf(clause.text) || summarize(clause.text, MINIMAL_WORDS, true);
       const key = type + '|' + text;
       // Dedupe repeated clauses (re-transcription loops) — but a narrative
       // connective means the speaker said it happened *again*, so keep it:
@@ -238,7 +240,7 @@ const GRAPH_SCHEMA = {
         type: 'object',
         properties: {
           type: { type: 'string', enum: NODE_TYPES },
-          text: { type: 'string', description: 'The idea, compressed to at most 9 words, lowercase start' },
+          text: { type: 'string', description: 'A 3-4 word topic label — essential nouns and verbs only, never a sentence, lowercase start' },
         },
         required: ['type', 'text'],
         additionalProperties: false,
@@ -272,7 +274,8 @@ const SYSTEM_PROMPT =
   'CONSTRAINT, OPEN QUESTION. Extract 2-8 boxes in the order the thought develops. ' +
   'For each edge, use the connective word the speaker actually said ("then", "but", "so", "because", ' +
   '"after that"); only fall back to an inferred label ("led to", "raises") when they said none. ' +
-  'Compress each box to at most 9 words, keeping the speaker\'s own wording where possible. ' +
+  'Each box is a 3-4 word topic label — only the essential nouns, verbs and qualifiers from the ' +
+  'speaker\'s own wording ("rent too expensive", "saw empty storefront"), never a full sentence. ' +
   'Ignore filler words and false starts, and omit fluff entirely: greetings, mic checks, asides, ' +
   'and meta-talk ("where was I", "hold on") — plus anything semantically unrelated to the thought. ' +
   'Only what is important and belongs to the thought becomes a box. ' +
@@ -305,8 +308,8 @@ export class ClaudeStructurer {
             content: (opts && opts.template ? 'Structure template: ' + opts.template + '\n\n' : '') +
               (opts && opts.template && MINIMAL_TYPES[opts.template]
                 ? 'Keep the bare minimum: at most ' + MINIMAL_CAP + ' boxes of only the types ' +
-                  MINIMAL_TYPES[opts.template].join(', ') + ', each compressed to ' + MINIMAL_WORDS +
-                  ' words or fewer — drop hedges, asides, and every clause that does not fit those types.\n\n'
+                  MINIMAL_TYPES[opts.template].join(', ') +
+                  ' — drop hedges, asides, and every clause that does not fit those types.\n\n'
                 : '') +
               'Transcript so far:\n' + transcript,
           }],

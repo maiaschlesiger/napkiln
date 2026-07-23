@@ -41,7 +41,11 @@ export function splitRunOn(text) {
         i > lastCut && verbInClause &&
         SUBJ_TAGS.some((tag) => has(t, tag)) &&
         !has(t, 'Conjunction') && !has(t, 'Preposition') &&
-        !BLOCK_PREV.some((tag) => has(terms[i - 1], tag))
+        !BLOCK_PREV.some((tag) => has(terms[i - 1], tag)) &&
+        // "notes app" is one compound, not a seam — but only for true common
+        // nouns (compromise tags pronouns/possessives as Noun subtypes too)
+        !(has(t, 'Noun') && !has(t, 'Pronoun') && !has(t, 'Possessive') &&
+          has(terms[i - 1], 'Noun') && !has(terms[i - 1], 'Pronoun'))
       ) {
         let vAt = -1;
         for (let j = i; j < Math.min(i + 5, terms.length); j++) {

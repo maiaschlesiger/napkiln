@@ -97,7 +97,7 @@ function AISettings({ open, onClose, capLabel, onApply }) {
         <input type="checkbox" className="nk-neural" checked={neural} disabled={!neuralAvailable()} onChange={(e) => setNeural(e.target.checked)} style={{ marginTop: 3, accentColor: TEAL }} />
         <span>
           <span style={{ display: 'block', ...sans(500, 13.5, INK) }}>Neural boost</span>
-          <span style={{ ...sans(400, 11.5, dim(.5)), lineHeight: 1.4 }}>a small local model sharpens box types · ~25 MB one-time, fully on-device</span>
+          <span style={{ ...sans(400, 11.5, dim(.5)), lineHeight: 1.4 }}>small local models sharpen box types and cut off-topic fluff · ~50 MB one-time, fully on-device</span>
         </span>
       </label>
       <input

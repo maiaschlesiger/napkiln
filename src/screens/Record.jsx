@@ -159,7 +159,7 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
   };
   const schedule = () => {
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(run, structurerRef.current.engine === 'Claude' ? 1200 : 350);
+    timerRef.current = setTimeout(run, structurerRef.current.engine === 'Claude' ? 1400 : 650);
   };
 
   // Capture lifecycle (speech mode) or demo feeder

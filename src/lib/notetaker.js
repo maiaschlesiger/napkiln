@@ -8,6 +8,7 @@
 // not by position, which is what a good note taker does.
 import winkNLP from 'wink-nlp';
 import model from 'wink-eng-lite-web-model';
+import compromise from 'compromise';
 import { prepClause, isQuestionish } from './linguistics.js';
 
 const nlp = winkNLP(model, ['sbd', 'pos', 'ner']);
@@ -151,6 +152,90 @@ export function noteFor(text, rank) {
     let out = kept.map((c) => c.w).join(' ');
     out = out.charAt(0).toLowerCase() + out.slice(1);
     return out + (q ? '?' : '');
+  } catch (e) {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Thought naming — a short, chat-style title for the whole recording.
+// The best TextRank-scored noun phrase names the subject ("voice notes",
+// "empty storefront"); a strongly-ranked verb becomes a gerund lead
+// ("Recording Voice Notes"), or the dominant box type adds a flavor word
+// ("Notes App Problem") — the way a good auto-namer titles a conversation.
+// ---------------------------------------------------------------------------
+const SMALL_WORD = /^(a|an|the|of|for|and|or|in|on|to|at|with|about|between)$/i;
+const FLAVOR = {
+  PROBLEM: 'Problem', CONSTRAINT: 'Tradeoffs', 'OPEN QUESTION': 'Question',
+  EVENT: 'Story', OPPORTUNITY: 'Idea', IDEA: 'Idea',
+};
+const titleCase = (s) => s.split(' ')
+  .map((w, i) => (i > 0 && SMALL_WORD.test(w) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+  .join(' ');
+
+export function titleFor(text, rank, dominantType) {
+  try {
+    rank = rank || rankTranscript(text);
+    const doc = nlp.readDoc(text);
+    // maximal noun-phrase runs (ADJ/NOUN/PROPN/NUM), scored by summed rank
+    const phrases = new Map(); // lemma-key -> { words, score, n, starts }
+    const verbs = [];          // { i, l } for the gerund-lead search
+    const posAt = [];          // pos by token index, to spot clause boundaries
+    let run = [];
+    const flush = () => {
+      if (run.length) {
+        const key = run.map((t) => t.l).join(' ');
+        let score = run.reduce((s, t) => s + (rank.get(t.l) || 0), 0) * (run.length === 1 ? 0.6 : 1);
+        if (run.every((t) => t.num)) score *= 0.3; // "nine thirty" is a detail, not a subject
+        const p = phrases.get(key);
+        if (p) { p.n += 1; p.score = Math.max(p.score, score); p.starts.push(run[0].i); }
+        else phrases.set(key, { words: run.map((t) => t.w), score, n: 1, starts: [run[0].i] });
+      }
+      run = [];
+    };
+    doc.tokens().each((t) => {
+      const pos = t.out(its.pos);
+      const w = t.out();
+      const i = t.index();
+      posAt[i] = pos;
+      if (pos === 'VERB' && !WEAK_VERB.test(t.out(its.lemma))) verbs.push({ i, l: t.out(its.lemma) });
+      const ok = (pos === 'NOUN' && !WEAK_NOUN.test(w)) || pos === 'PROPN' || pos === 'NUM' ||
+        (pos === 'ADJ' && !WEAK_ADJ.test(w) && !t.out(its.stopWordFlag));
+      if (ok && run.length < 3) run.push({ w, l: t.out(its.lemma), i, num: pos === 'NUM' });
+      else flush();
+    });
+    flush();
+    if (!phrases.size) return null;
+    const best = [...phrases.values()]
+      .sort((a, b) => b.score * Math.sqrt(b.n) - a.score * Math.sqrt(a.n))[0];
+    let words = best.words.slice();
+    if (words.length <= 2) {
+      // the verb that acts on the phrase leads as a gerund: "renting the wall
+      // space" → "Renting Wall Space" — it must sit just before an occurrence
+      let verb = null;
+      const sameClause = (from, to) => {
+        for (let k = from + 1; k < to; k++) {
+          if (posAt[k] === 'CCONJ' || posAt[k] === 'SCONJ' || posAt[k] === 'PUNCT') return false;
+        }
+        return true;
+      };
+      for (const v of verbs) {
+        if (best.words.some((w) => w.toLowerCase().startsWith(v.l))) continue;
+        if (!best.starts.some((s) => v.i < s && s - v.i <= 3 && sameClause(v.i, s))) continue;
+        const r = rank.get(v.l) || 0;
+        if (!verb || r > verb.r) verb = { l: v.l, r };
+      }
+      if (verb) {
+        const ger = compromise(verb.l).tag('Verb').verbs().toGerund().text().replace(/^is /, '');
+        if (ger) words = [ger, ...words];
+      } else if (dominantType && FLAVOR[dominantType] &&
+        !words.some((w) => w.toLowerCase() === FLAVOR[dominantType].toLowerCase())) {
+        words = [...words, FLAVOR[dominantType]];
+      }
+    }
+    let title = titleCase(words.join(' '));
+    if (title.length > 34) title = title.slice(0, 34).replace(/\s\S*$/, '') + '…';
+    return title;
   } catch (e) {
     return null;
   }

@@ -25,7 +25,7 @@ const KEEP_ENT = new Set(['MONEY', 'DATE', 'TIME', 'DURATION', 'CARDINAL', 'ORDI
 // still counts if the transcript leans on them).
 const WEAK_VERB = /^(be|is|are|was|were|been|being|am|do|does|did|have|has|had|get|gets|got|go|goes|went|gonna|make|makes|made)$/i;
 // Nouns that name nothing in particular — a note spends its 4 words elsewhere.
-const WEAK_NOUN = /^(way|ways|stuff|bit|bits|lot|lots|one|ones|guy|guys|kind|kinds|sort|sorts)$/i;
+const WEAK_NOUN = /^(way|ways|stuff|bit|bits|lot|lots|one|ones|guy|guys|kind|kinds|sort|sorts|while|thing|things|something|someone)$/i;
 const WEAK_ADJ = /^(own|same|such|other|whole|able|sure)$/i;
 
 // ---------------------------------------------------------------------------
@@ -87,7 +87,11 @@ export function rankTranscript(text) {
 const MAX_WORDS = 4;      // a note is 3-4 words…
 const MAX_WITH_ENT = 5;   // …stretching to 5 to keep a multi-word entity whole
 
-export function noteFor(text, rank) {
+// maxWords lets a caller ask for a slightly longer "golden" box (role-driven
+// template extraction wants 5-6 words); free-flow notes stay terse at 4.
+export function noteFor(text, rank, maxWords = MAX_WORDS) {
+  const cap0 = maxWords;
+  const capEnt = maxWords + 1;
   try {
     const q = /\?\s*$/.test(text.trim()) || isQuestionish(text);
     const src = prepClause(text);
@@ -114,7 +118,7 @@ export function noteFor(text, rank) {
       // content classes and only drop true function words plus junk adjectives
       else if (t.out(its.stopWordFlag) && (!CONTENT_POS.has(pos) || WEAK_ADJ.test(w))) return;
       else if (pos === 'PROPN' || pos === 'NUM') score += 1.5;
-      else if (pos === 'NOUN') score += WEAK_NOUN.test(w) ? 0.2 : 1;
+      else if (pos === 'NOUN') { if (WEAK_NOUN.test(w)) return; score += 1; }
       else if (pos === 'VERB') score += WEAK_VERB.test(w) ? 0.2 : 1.1;
       else if (pos === 'ADJ') score += 0.8;
       else return;
@@ -126,7 +130,7 @@ export function noteFor(text, rank) {
     const picked = new Set();
     const ents = new Set();
     for (const c of byScore) {
-      const cap = ents.size ? MAX_WITH_ENT : MAX_WORDS;
+      const cap = ents.size ? capEnt : cap0;
       if (picked.size >= cap) break;
       picked.add(c.i);
       if (c.ent) {
@@ -135,7 +139,7 @@ export function noteFor(text, rank) {
       }
     }
     let kept = cand.filter((c) => picked.has(c.i));
-    kept = kept.slice(0, ents.size ? MAX_WITH_ENT : MAX_WORDS);
+    kept = kept.slice(0, ents.size ? capEnt : cap0);
     // a note without its verb garbles the meaning ("people never voice
     // memos") — swap the weakest plain noun for the clause's best verb
     if (!kept.some((c) => c.pos === 'VERB')) {

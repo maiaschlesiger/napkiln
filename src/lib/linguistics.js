@@ -28,7 +28,7 @@ const strip = (words) => {
   return words;
 };
 const fit = (words, q) => {
-  const w = strip(words.slice(0, 4));
+  const w = strip(words.slice(0, 7));
   if (w.length < 2) return null;
   let t = w.join(' ');
   t = t.charAt(0).toLowerCase() + t.slice(1);

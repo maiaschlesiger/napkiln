@@ -10,7 +10,6 @@ import winkNLP from 'wink-nlp';
 import model from 'wink-eng-lite-web-model';
 import compromise from 'compromise';
 import { prepClause, isQuestionish } from './linguistics.js';
-import { memoize } from './memo.js';
 
 const nlp = winkNLP(model, ['sbd', 'pos', 'ner']);
 const its = nlp.its;
@@ -38,24 +37,16 @@ const WEAK_ADJ = /^(own|same|such|other|whole|able|sure)$/i;
 // ---------------------------------------------------------------------------
 const WINDOW = 4;
 const DAMPING = 0.85;
-const ITERATIONS = 10; // TextRank converges well before 20; half the work
-const RANK_MAX_TOKENS = 1500; // cap work on very long recordings
-const RANK_MAX_CHARS = 9000;  // …and cap the PARSE itself, not just the maths
+const ITERATIONS = 20;
 
-function rankTranscriptImpl(text) {
+export function rankTranscript(text) {
   const rank = new Map();
   try {
-    // Parse only the most recent window so a 10-minute transcript costs the
-    // same per pass as a 1-minute one (importance for the current boxes is
-    // driven by recent + repeated terms anyway). Without this the wink parse
-    // grows with the whole recording and blocks the main thread.
-    const recent = text.length > RANK_MAX_CHARS ? text.slice(text.length - RANK_MAX_CHARS) : text;
     const seq = [];
-    nlp.readDoc(recent).tokens().each((t) => {
+    nlp.readDoc(text).tokens().each((t) => {
       if (CONTENT_POS.has(t.out(its.pos))) seq.push(t.out(its.lemma));
     });
     if (!seq.length) return rank;
-    if (seq.length > RANK_MAX_TOKENS) seq.splice(0, seq.length - RANK_MAX_TOKENS);
     const edges = new Map(); // lemma -> Map(neighbor -> weight)
     const link = (a, b) => {
       if (a === b) return;
@@ -87,19 +78,18 @@ function rankTranscriptImpl(text) {
   } catch (e) { /* no ranking — noteFor scores on POS alone */ }
   return rank;
 }
-// Memoized by transcript text — a stable transcript re-ranks for free.
-export const rankTranscript = memoize(rankTranscriptImpl, (t) => t, 64);
 
 // ---------------------------------------------------------------------------
 // One clause -> one note. Candidate words are scored by transcript-wide
 // TextRank importance plus what they are (an amount beats an adjective);
 // the top few survive in speaking order.
 // ---------------------------------------------------------------------------
-const MAX_WORDS = 7;      // a note is ~5-7 words (fewer for short clauses)…
-const MAX_WITH_ENT = 8;   // …stretching to 8 to keep a multi-word entity whole
+const MAX_WORDS = 4;      // a note is 3-4 words…
+const MAX_WITH_ENT = 5;   // …stretching to 5 to keep a multi-word entity whole
 
-// maxWords lets a caller ask for a slightly longer "golden" box.
-function noteForImpl(text, rank, maxWords = MAX_WORDS) {
+// maxWords lets a caller ask for a slightly longer "golden" box (role-driven
+// template extraction wants 5-6 words); free-flow notes stay terse at 4.
+export function noteFor(text, rank, maxWords = MAX_WORDS) {
   const cap0 = maxWords;
   const capEnt = maxWords + 1;
   try {
@@ -115,12 +105,10 @@ function noteForImpl(text, rank, maxWords = MAX_WORDS) {
       e.tokens().each((t) => entIdx.set(t.index(), id));
     });
     const cand = [];
-    const allTok = []; // every token, to rebuild a readable span later
     doc.tokens().each((t) => {
       const w = t.out();
       const pos = t.out(its.pos);
       const i = t.index();
-      allTok.push({ w, pos, i });
       let score = (rank && rank.get(t.out(its.lemma))) || 0;
       if (entIdx.has(i)) score += 3;
       else if (i === 0 && WH_RE.test(w)) score += 10;     // a question keeps its wh-word
@@ -165,47 +153,13 @@ function noteForImpl(text, rank, maxWords = MAX_WORDS) {
     // a straggler far from the rest reads as noise, not as the same note
     while (kept.length > 3 && kept[kept.length - 1].i - kept[kept.length - 2].i > 3) kept.pop();
     if (kept.length < 2) return null;
-
-    // Build a *readable* label: take the contiguous window spanning the
-    // important words (so the glue that makes it legible — "to", "the",
-    // "about" — comes back), instead of a telegraphic keyword list.
-    const K = kept.map((c) => c.i).sort((a, b) => a - b);
-    let lo = K[0], hi = K[K.length - 1];
-    let span = allTok.slice(lo, hi + 1);
-    if (span.length > maxWords) {
-      // important words are spread out — keep the readable head, drop the tail
-      span = span.slice(0, maxWords);
-    } else {
-      // too terse — extend left through glue/quantifiers ("a lot of") for
-      // readability, but stop at a clause boundary or a new content word
-      while (span.length < Math.min(5, maxWords) && lo > 0) {
-        const p = allTok[lo - 1];
-        if (CLAUSE_BREAK.has(p.pos) || p.pos === 'PRON' || p.pos === 'PROPN' ||
-          p.pos === 'VERB' || (p.pos === 'NOUN' && !WEAK_NOUN.test(p.w))) break;
-        lo -= 1; span = allTok.slice(lo, hi + 1);
-      }
-    }
-    // trim leading/trailing glue that doesn't carry meaning — but never an
-    // important word itself ("forever" ends "cleaning it up takes forever")
-    const keepIdx = new Set(K);
-    while (span.length > 2 && LEAD_TRIM.has(span[0].pos) && !keepIdx.has(span[0].i)) span = span.slice(1);
-    while (span.length > 2 && TRAIL_TRIM.has(span[span.length - 1].pos) && !keepIdx.has(span[span.length - 1].i)) span = span.slice(0, -1);
-    if (span.length < 2) return null;
-    let out = span.map((s) => s.w).join(' ').replace(/\s+([',.])/g, '$1');
+    let out = kept.map((c) => c.w).join(' ');
     out = out.charAt(0).toLowerCase() + out.slice(1);
-    return out + (q && !/\?$/.test(out) ? '?' : '');
+    return out + (q ? '?' : '');
   } catch (e) {
     return null;
   }
 }
-
-const CLAUSE_BREAK = new Set(['CCONJ', 'SCONJ', 'PUNCT']);
-const LEAD_TRIM = new Set(['AUX', 'PART', 'CCONJ', 'SCONJ', 'ADP']);
-const TRAIL_TRIM = new Set(['AUX', 'PART', 'CCONJ', 'SCONJ', 'ADP', 'DET', 'PRON', 'ADV']);
-
-// Memoized public entry — the label of a given clause at a given length is
-// stable across passes, so caching by (text|maxWords) makes re-runs free.
-export const noteFor = memoize(noteForImpl, (text, _rank, mw = MAX_WORDS) => text + '|' + mw);
 
 // ---------------------------------------------------------------------------
 // Thought naming — a short, chat-style title for the whole recording.
@@ -223,14 +177,10 @@ const titleCase = (s) => s.split(' ')
   .map((w, i) => (i > 0 && SMALL_WORD.test(w) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)))
   .join(' ');
 
-const TITLE_MAX_CHARS = 700; // the subject is named early — title from the head
-
-function titleForImpl(text, rank, dominantType) {
+export function titleFor(text, rank, dominantType) {
   try {
     rank = rank || rankTranscript(text);
-    // parse only the opening so titling stays cheap on a long recording
-    const head = text.length > TITLE_MAX_CHARS ? text.slice(0, TITLE_MAX_CHARS) : text;
-    const doc = nlp.readDoc(head);
+    const doc = nlp.readDoc(text);
     // maximal noun-phrase runs (ADJ/NOUN/PROPN/NUM), scored by summed rank
     const phrases = new Map(); // lemma-key -> { words, score, n, starts }
     const verbs = [];          // { i, l } for the gerund-lead search
@@ -294,5 +244,3 @@ function titleForImpl(text, rank, dominantType) {
     return null;
   }
 }
-// key by the head only — once the opening is stable the title stops recomputing
-export const titleFor = memoize(titleForImpl, (text, _rank, dom) => text.slice(0, TITLE_MAX_CHARS) + '|' + (dom || ''), 64);

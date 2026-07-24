@@ -84,8 +84,8 @@ export function rankTranscript(text) {
 // TextRank importance plus what they are (an amount beats an adjective);
 // the top few survive in speaking order.
 // ---------------------------------------------------------------------------
-const MAX_WORDS = 4;      // a note is 3-4 words…
-const MAX_WITH_ENT = 5;   // …stretching to 5 to keep a multi-word entity whole
+const MAX_WORDS = 8;      // a note is ~5-8 words (fewer for short clauses)…
+const MAX_WITH_ENT = 9;   // …stretching to 9 to keep a multi-word entity whole
 
 // maxWords lets a caller ask for a slightly longer "golden" box (role-driven
 // template extraction wants 5-6 words); free-flow notes stay terse at 4.
@@ -105,10 +105,12 @@ export function noteFor(text, rank, maxWords = MAX_WORDS) {
       e.tokens().each((t) => entIdx.set(t.index(), id));
     });
     const cand = [];
+    const allTok = []; // every token, to rebuild a readable span later
     doc.tokens().each((t) => {
       const w = t.out();
       const pos = t.out(its.pos);
       const i = t.index();
+      allTok.push({ w, pos, i });
       let score = (rank && rank.get(t.out(its.lemma))) || 0;
       if (entIdx.has(i)) score += 3;
       else if (i === 0 && WH_RE.test(w)) score += 10;     // a question keeps its wh-word
@@ -153,13 +155,43 @@ export function noteFor(text, rank, maxWords = MAX_WORDS) {
     // a straggler far from the rest reads as noise, not as the same note
     while (kept.length > 3 && kept[kept.length - 1].i - kept[kept.length - 2].i > 3) kept.pop();
     if (kept.length < 2) return null;
-    let out = kept.map((c) => c.w).join(' ');
+
+    // Build a *readable* label: take the contiguous window spanning the
+    // important words (so the glue that makes it legible — "to", "the",
+    // "about" — comes back), instead of a telegraphic keyword list.
+    const K = kept.map((c) => c.i).sort((a, b) => a - b);
+    let lo = K[0], hi = K[K.length - 1];
+    let span = allTok.slice(lo, hi + 1);
+    if (span.length > maxWords) {
+      // important words are spread out — keep the readable head, drop the tail
+      span = span.slice(0, maxWords);
+    } else {
+      // too terse — extend left through glue/quantifiers ("a lot of") for
+      // readability, but stop at a clause boundary or a new content word
+      while (span.length < Math.min(5, maxWords) && lo > 0) {
+        const p = allTok[lo - 1];
+        if (CLAUSE_BREAK.has(p.pos) || p.pos === 'PRON' || p.pos === 'PROPN' ||
+          p.pos === 'VERB' || (p.pos === 'NOUN' && !WEAK_NOUN.test(p.w))) break;
+        lo -= 1; span = allTok.slice(lo, hi + 1);
+      }
+    }
+    // trim leading/trailing glue that doesn't carry meaning — but never an
+    // important word itself ("forever" ends "cleaning it up takes forever")
+    const keepIdx = new Set(K);
+    while (span.length > 2 && LEAD_TRIM.has(span[0].pos) && !keepIdx.has(span[0].i)) span = span.slice(1);
+    while (span.length > 2 && TRAIL_TRIM.has(span[span.length - 1].pos) && !keepIdx.has(span[span.length - 1].i)) span = span.slice(0, -1);
+    if (span.length < 2) return null;
+    let out = span.map((s) => s.w).join(' ').replace(/\s+([',.])/g, '$1');
     out = out.charAt(0).toLowerCase() + out.slice(1);
-    return out + (q ? '?' : '');
+    return out + (q && !/\?$/.test(out) ? '?' : '');
   } catch (e) {
     return null;
   }
 }
+
+const CLAUSE_BREAK = new Set(['CCONJ', 'SCONJ', 'PUNCT']);
+const LEAD_TRIM = new Set(['AUX', 'PART', 'CCONJ', 'SCONJ', 'ADP']);
+const TRAIL_TRIM = new Set(['AUX', 'PART', 'CCONJ', 'SCONJ', 'ADP', 'DET', 'PRON', 'ADV']);
 
 // ---------------------------------------------------------------------------
 // Thought naming — a short, chat-style title for the whole recording.

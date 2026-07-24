@@ -25,7 +25,7 @@ const cleanText = (s) => s.replace(FILLERS, ' ').replace(/\s+/g, ' ').trim();
 // Boxes are terse notes: importance-ranked extraction first (wink-nlp +
 // TextRank), then POS-pattern topics, then the word-cap summarizer.
 export function summarizeClause(seg) {
-  return noteFor(seg, rankTranscript(seg)) || topicOf(seg) || summarize(seg, 4, true);
+  return noteFor(seg, rankTranscript(seg)) || topicOf(seg) || summarize(seg, 8, true);
 }
 
 const HEDGES = /\b(maybe|probably|possibly|just|really|very|honestly|definitely|pretty much|i mean|i think|i guess)\b/gi;
@@ -65,7 +65,7 @@ const MINIMAL_TYPES = {
   'Around a question': ['OPEN QUESTION', 'OPPORTUNITY', 'IDEA', 'GOAL'],
 };
 const MINIMAL_CAP = 5;      // boxes
-const MINIMAL_WORDS = 4;    // words per box (fallback cap when no topic emerges)
+const MINIMAL_WORDS = 8;    // words per box (fallback cap when no topic emerges)
 
 // ---------------------------------------------------------------------------
 // Discourse-driven segmentation. Speech transcripts arrive largely
@@ -235,7 +235,7 @@ export class HeuristicStructurer {
     // Importance scores span the whole transcript, so each box keeps the
     // words that matter to the thought — not just to its own clause
     const rank = rankTranscript(scrubbed);
-    const GOLDEN = 6; // template boxes get a slightly longer "golden" label
+    const GOLDEN = 10; // template boxes get a fuller "golden" label (~6-10 words)
     // Role-first path: for a named structure, listen for each role it expects
     // (problem, audience, opportunity, question…) and keep the single best
     // clause per role — condensed into a golden box, grounded in what was said.
@@ -321,7 +321,7 @@ const GRAPH_SCHEMA = {
         type: 'object',
         properties: {
           type: { type: 'string', enum: NODE_TYPES },
-          text: { type: 'string', description: 'A clear 5-6 word label, rewritten in plain words like an expert note-taker: oversimplify the phrasing but keep every important bit — names, numbers, amounts, dates, negations. Lowercase start, never a full sentence.' },
+          text: { type: 'string', description: 'A clear 6-10 word label, rewritten in plain words like an expert note-taker: oversimplify the phrasing but keep enough to understand it — and every important bit (names, numbers, amounts, dates, negations). Lowercase start, never a full sentence.' },
           source: { type: 'string', description: 'The exact phrase from the transcript this box was drawn from, quoted verbatim (you may trim only fillers), so the user can tap the box and verify the interpretation. Never reworded.' },
         },
         required: ['type', 'text', 'source'],
@@ -363,10 +363,11 @@ const SYSTEM_PROMPT =
   'Work role-first: decide which roles the thought actually contains, then for each role capture the ' +
   'one phrase that best expresses it and condense that — separate the context from the audience from ' +
   'the problem from the solution, each in its own box.\n' +
-  'LABEL: rewrite each box into a clear 5-6 word phrase like an expert note-taker — oversimplify the ' +
-  'wording but never lose an important bit. Keep names, numbers, amounts, dates, times and negations ' +
-  '("important points get buried", "rent is eight hundred a month", "meet sarah tuesday at nine"); drop ' +
-  'hedges, filler and glue words. It is a label, never a full sentence.\n' +
+  'LABEL: rewrite each box into a clear 6-10 word phrase like an expert note-taker — oversimplify the ' +
+  'wording but keep enough that it reads clearly on its own, and never lose an important bit. Keep ' +
+  'names, numbers, amounts, dates, times and negations ("important points get buried in the recording", ' +
+  '"rent would be about eight hundred a month", "meet sarah tuesday at nine about the lease"); drop ' +
+  'hedges, filler and glue words. It is a compact label, never a full rambling sentence.\n' +
   'SOURCE: for every box, copy the exact phrase from the transcript it came from into "source", ' +
   'verbatim (trim only fillers) — this is what the user taps to check your interpretation, so it must ' +
   'stay faithful to what they actually said and never be reworded.\n' +
@@ -388,11 +389,11 @@ const EXAMPLE_INPUT =
 const EXAMPLE_OUTPUT = {
   title: 'Condensing Recorded Dreams',
   nodes: [
-    { type: 'CONTEXT', text: 'people like recording their dreams', source: 'they like to record their dreams' },
-    { type: 'PROBLEM', text: 'dream recordings hold too much', source: "it's a lot of information" },
-    { type: 'PROBLEM', text: 'the key point gets buried', source: "it's hard to get the point" },
-    { type: 'OPPORTUNITY', text: 'an app to transcribe dreams', source: "it'd be cool if there was an app that could transcribe your dreams" },
-    { type: 'IDEA', text: 'keep only the important points', source: 'really just keep the most important points' },
+    { type: 'AUDIENCE', text: 'people like to record their dreams', source: 'they like to record their dreams' },
+    { type: 'PROBLEM', text: 'dream recordings hold too much information', source: "it's a lot of information" },
+    { type: 'PROBLEM', text: 'the important point gets buried', source: "it's hard to get the point" },
+    { type: 'OPPORTUNITY', text: 'an app that transcribes your dreams', source: "it'd be cool if there was an app that could transcribe your dreams" },
+    { type: 'IDEA', text: 'keep only the most important points', source: 'really just keep the most important points' },
   ],
   edges: [{ label: 'so' }, { label: 'and' }, { label: 'so' }, { label: 'does' }],
 };

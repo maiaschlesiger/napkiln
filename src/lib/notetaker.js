@@ -10,6 +10,7 @@ import winkNLP from 'wink-nlp';
 import model from 'wink-eng-lite-web-model';
 import compromise from 'compromise';
 import { prepClause, isQuestionish } from './linguistics.js';
+import { memoize } from './memo.js';
 
 const nlp = winkNLP(model, ['sbd', 'pos', 'ner']);
 const its = nlp.its;
@@ -37,16 +38,23 @@ const WEAK_ADJ = /^(own|same|such|other|whole|able|sure)$/i;
 // ---------------------------------------------------------------------------
 const WINDOW = 4;
 const DAMPING = 0.85;
-const ITERATIONS = 20;
+const ITERATIONS = 10;        // TextRank converges well before 20; half the work
+const RANK_MAX_TOKENS = 1500; // cap the ranking maths on very long recordings
+const RANK_MAX_CHARS = 9000;  // …and cap the PARSE itself, not just the maths
 
-export function rankTranscript(text) {
+function rankTranscriptImpl(text) {
   const rank = new Map();
   try {
+    // Parse only the most recent window so a 10-minute transcript costs the
+    // same per pass as a 1-minute one — otherwise the wink parse grows with
+    // the whole recording and blocks the main thread.
+    const recent = text.length > RANK_MAX_CHARS ? text.slice(text.length - RANK_MAX_CHARS) : text;
     const seq = [];
-    nlp.readDoc(text).tokens().each((t) => {
+    nlp.readDoc(recent).tokens().each((t) => {
       if (CONTENT_POS.has(t.out(its.pos))) seq.push(t.out(its.lemma));
     });
     if (!seq.length) return rank;
+    if (seq.length > RANK_MAX_TOKENS) seq.splice(0, seq.length - RANK_MAX_TOKENS);
     const edges = new Map(); // lemma -> Map(neighbor -> weight)
     const link = (a, b) => {
       if (a === b) return;
@@ -78,6 +86,8 @@ export function rankTranscript(text) {
   } catch (e) { /* no ranking — noteFor scores on POS alone */ }
   return rank;
 }
+// Memoized by transcript text — a stable transcript re-ranks for free.
+export const rankTranscript = memoize(rankTranscriptImpl, (t) => t, 64);
 
 // ---------------------------------------------------------------------------
 // One clause -> one note. Candidate words are scored by transcript-wide
@@ -89,7 +99,7 @@ const MAX_WITH_ENT = 5;   // …stretching to 5 to keep a multi-word entity whol
 
 // maxWords lets a caller ask for a slightly longer "golden" box (role-driven
 // template extraction wants 5-6 words); free-flow notes stay terse at 4.
-export function noteFor(text, rank, maxWords = MAX_WORDS) {
+function noteForImpl(text, rank, maxWords = MAX_WORDS) {
   const cap0 = maxWords;
   const capEnt = maxWords + 1;
   try {
@@ -160,6 +170,10 @@ export function noteFor(text, rank, maxWords = MAX_WORDS) {
     return null;
   }
 }
+// Memoized by (text|maxWords) — a clause's note is stable across passes, so
+// re-condensing it costs nothing after the first time. (rank is intentionally
+// out of the key: the label barely shifts once a clause is spoken.)
+export const noteFor = memoize(noteForImpl, (text, _rank, mw = MAX_WORDS) => text + '|' + mw);
 
 // ---------------------------------------------------------------------------
 // Thought naming — a short, chat-style title for the whole recording.
@@ -177,10 +191,14 @@ const titleCase = (s) => s.split(' ')
   .map((w, i) => (i > 0 && SMALL_WORD.test(w) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)))
   .join(' ');
 
-export function titleFor(text, rank, dominantType) {
+const TITLE_MAX_CHARS = 700; // the subject is named early — title from the head
+
+function titleForImpl(text, rank, dominantType) {
   try {
     rank = rank || rankTranscript(text);
-    const doc = nlp.readDoc(text);
+    // parse only the opening so titling stays cheap on a long recording
+    const head = text.length > TITLE_MAX_CHARS ? text.slice(0, TITLE_MAX_CHARS) : text;
+    const doc = nlp.readDoc(head);
     // maximal noun-phrase runs (ADJ/NOUN/PROPN/NUM), scored by summed rank
     const phrases = new Map(); // lemma-key -> { words, score, n, starts }
     const verbs = [];          // { i, l } for the gerund-lead search
@@ -244,3 +262,5 @@ export function titleFor(text, rank, dominantType) {
     return null;
   }
 }
+// key by the head only — once the opening is stable the title stops recomputing
+export const titleFor = memoize(titleForImpl, (text, _rank, dom) => text.slice(0, TITLE_MAX_CHARS) + '|' + (dom || ''), 64);

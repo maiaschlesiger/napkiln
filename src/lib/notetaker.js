@@ -40,17 +40,21 @@ const WINDOW = 4;
 const DAMPING = 0.85;
 const ITERATIONS = 10; // TextRank converges well before 20; half the work
 const RANK_MAX_TOKENS = 1500; // cap work on very long recordings
+const RANK_MAX_CHARS = 9000;  // …and cap the PARSE itself, not just the maths
 
 function rankTranscriptImpl(text) {
   const rank = new Map();
   try {
+    // Parse only the most recent window so a 10-minute transcript costs the
+    // same per pass as a 1-minute one (importance for the current boxes is
+    // driven by recent + repeated terms anyway). Without this the wink parse
+    // grows with the whole recording and blocks the main thread.
+    const recent = text.length > RANK_MAX_CHARS ? text.slice(text.length - RANK_MAX_CHARS) : text;
     const seq = [];
-    nlp.readDoc(text).tokens().each((t) => {
+    nlp.readDoc(recent).tokens().each((t) => {
       if (CONTENT_POS.has(t.out(its.pos))) seq.push(t.out(its.lemma));
     });
     if (!seq.length) return rank;
-    // long recordings: rank only the most recent window (importance for the
-    // current boxes is driven by recent + repeated terms anyway)
     if (seq.length > RANK_MAX_TOKENS) seq.splice(0, seq.length - RANK_MAX_TOKENS);
     const edges = new Map(); // lemma -> Map(neighbor -> weight)
     const link = (a, b) => {
@@ -219,10 +223,14 @@ const titleCase = (s) => s.split(' ')
   .map((w, i) => (i > 0 && SMALL_WORD.test(w) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)))
   .join(' ');
 
+const TITLE_MAX_CHARS = 700; // the subject is named early — title from the head
+
 function titleForImpl(text, rank, dominantType) {
   try {
     rank = rank || rankTranscript(text);
-    const doc = nlp.readDoc(text);
+    // parse only the opening so titling stays cheap on a long recording
+    const head = text.length > TITLE_MAX_CHARS ? text.slice(0, TITLE_MAX_CHARS) : text;
+    const doc = nlp.readDoc(head);
     // maximal noun-phrase runs (ADJ/NOUN/PROPN/NUM), scored by summed rank
     const phrases = new Map(); // lemma-key -> { words, score, n, starts }
     const verbs = [];          // { i, l } for the gerund-lead search
@@ -286,4 +294,5 @@ function titleForImpl(text, rank, dominantType) {
     return null;
   }
 }
-export const titleFor = memoize(titleForImpl, (text, _rank, dom) => text + '|' + (dom || ''), 64);
+// key by the head only — once the opening is stable the title stops recomputing
+export const titleFor = memoize(titleForImpl, (text, _rank, dom) => text.slice(0, TITLE_MAX_CHARS) + '|' + (dom || ''), 64);

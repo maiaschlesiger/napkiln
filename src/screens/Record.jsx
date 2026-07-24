@@ -159,7 +159,7 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
   };
   const schedule = () => {
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(run, structurerRef.current.engine === 'Claude' ? 1400 : 650);
+    timerRef.current = setTimeout(run, structurerRef.current.engine === 'Claude' ? 1200 : 350);
   };
 
   // Capture lifecycle (speech mode) or demo feeder
@@ -222,31 +222,19 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
     return () => { aliveRef.current = false; clearTimeout(timerRef.current); };
   }, [typed, attempt, demo]);
 
-  const finish = async () => {
+  const finish = () => {
     const s = stateRef.current;
     if (capRef.current) { capRef.current.stop(); capRef.current = null; }
-    aliveRef.current = false;
-    clearTimeout(timerRef.current);
-    // Live passes structure only a recent window for speed; run one full pass
-    // over the whole transcript now so the saved thought captures everything.
-    const text = (s.transcript + ' ' + s.interim).trim();
-    let g = { nodes: s.nodes, edges: s.edges, title: s.title };
-    if (text) {
-      try {
-        const full = await structurerRef.current.structure(text, { template: tplName, full: true });
-        if (full.nodes.length) g = full;
-      } catch (e) { /* keep the last live graph */ }
-    }
-    if (!g.nodes.length) { onDone(null); return; }
+    if (!s.nodes.length) { onDone(null); return; }
     // the structurer names the thought; fall back to the strongest box text
-    let title = g.title;
+    let title = s.title;
     if (!title) {
-      const t = g.nodes.find((n) => n.type === 'OPPORTUNITY' || n.type === 'IDEA') || g.nodes[0];
+      const t = s.nodes.find((n) => n.type === 'OPPORTUNITY' || n.type === 'IDEA') || s.nodes[0];
       title = t.text.replace(/[?.]$/, '');
       if (title.length > 34) title = title.slice(0, 34).replace(/\s\S*$/, '') + '…';
       title = title.charAt(0).toUpperCase() + title.slice(1);
     }
-    onDone({ nodes: g.nodes, edges: g.edges, title });
+    onDone({ nodes: s.nodes, edges: s.edges, title });
   };
 
   const togglePause = () => {

@@ -11,7 +11,7 @@ import { isFluff, scrubFluff, filterUnrelated } from './salience.js';
 
 const TEAL = '#1F8A96', CLAY = '#E0824E';
 const KEY_STORAGE = 'napkiln-anthropic-key';
-const NODE_TYPES = ['PROBLEM', 'CONTEXT', 'OPPORTUNITY', 'IDEA', 'CONSTRAINT', 'OPEN QUESTION', 'EVENT'];
+const NODE_TYPES = ['PROBLEM', 'CONTEXT', 'OPPORTUNITY', 'IDEA', 'CONSTRAINT', 'OPEN QUESTION', 'EVENT', 'GOAL'];
 const styleFor = (type) => ({
   c: (type === 'CONSTRAINT' || type === 'OPEN QUESTION') ? CLAY : TEAL,
   solid: !(type === 'OPEN QUESTION' || type === 'CONTEXT'),
@@ -28,6 +28,18 @@ export function summarizeClause(seg) {
 }
 
 const HEDGES = /\b(maybe|probably|possibly|just|really|very|honestly|definitely|pretty much|i mean|i think|i guess)\b/gi;
+
+// The exact spoken phrase a box came from, lightly tidied (fillers out,
+// leading connective off) but never reworded — this is what the user taps to
+// verify the AI's interpretation, so it must stay faithful to what they said.
+function groundingOf(seg) {
+  let t = cleanText(seg)
+    .replace(/^((and|but|so|then|also|well|okay|ok|alright|yeah|right|like)[\s,]+)+/i, '')
+    .replace(/[\s,]+(and|but|so|then|or|also)\s*$/i, '')
+    .trim();
+  if (!t) return '';
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
 
 function summarize(seg, cap = 9, minimal = false) {
   let t = cleanText(seg)
@@ -47,9 +59,9 @@ function summarize(seg, cap = 9, minimal = false) {
 // hard-capped and tersely worded. Free flow and Sequence keep full detail —
 // a story needs its beats.
 const MINIMAL_TYPES = {
-  'Problem → Solution': ['PROBLEM', 'OPPORTUNITY', 'CONSTRAINT', 'OPEN QUESTION'],
-  'Weighing options': ['OPPORTUNITY', 'IDEA', 'CONSTRAINT'],
-  'Around a question': ['OPEN QUESTION', 'OPPORTUNITY', 'IDEA'],
+  'Problem → Solution': ['PROBLEM', 'OPPORTUNITY', 'CONSTRAINT', 'OPEN QUESTION', 'GOAL'],
+  'Weighing options': ['OPPORTUNITY', 'IDEA', 'CONSTRAINT', 'GOAL'],
+  'Around a question': ['OPEN QUESTION', 'OPPORTUNITY', 'IDEA', 'GOAL'],
 };
 const MINIMAL_CAP = 5;      // boxes
 const MINIMAL_WORDS = 4;    // words per box (fallback cap when no topic emerges)
@@ -169,6 +181,8 @@ function classify(seg, connective) {
   if (/\b(problem|issue|annoying|frustrat\w*|pain(ful)?|struggle|never (listen|open|look|go back)|go(es)? unheard|doesn'?t work|hate|hard to)\b/.test(s)) return 'PROBLEM';
   if (/\b(rigid|can'?t|cannot|won'?t work|limitation|constraint|the catch|too (hard|slow|clunky|expensive|rigid)|feels? (rigid|forced|wrong|clunky))\b/.test(s)) return 'CONSTRAINT';
   if (NARRATIVE_CONNECTIVES.has(connective) || PAST_NARRATIVE.test(s) || TIME_OPENER.test(s) || hasPastAction(s)) return 'EVENT';
+  // the outcome the speaker wants — a goal, not just an idea
+  if (/^(i want to|i'?d (love|like) to|i really want|i wish|my goal|the goal is|ideally|what i (really )?want)\b/.test(s) || /\bso that (i|we|it|they)\b/.test(s)) return 'GOAL';
   if (/\b(what if|imagine|we could|i could|could be|maybe (we|i|it)|opportunity|the idea is|it would be (cool|great|nice)|visuali[sz]e|wouldn'?t it be)\b/.test(s)) return 'OPPORTUNITY';
   if (/^(when(ever)?|while|usually|normally|lately|every time|i keep|i always|i often|these days|context)\b/.test(s)) return 'CONTEXT';
   if (connective === 'but') return 'CONSTRAINT'; // contrastive beat with no stronger signal
@@ -179,8 +193,10 @@ function classify(seg, connective) {
 function edgeLabel(prevType, nextType) {
   if (nextType === 'CONSTRAINT') return 'but';
   if (nextType === 'OPEN QUESTION') return 'raises';
+  if (nextType === 'GOAL') return 'toward';
   if (nextType === 'EVENT' || prevType === 'EVENT') return 'then';
   if (prevType === 'PROBLEM') return 'led to';
+  if (prevType === 'GOAL') return 'needs';
   if (prevType === 'CONTEXT') return 'so';
   if (nextType === 'OPPORTUNITY') return 'so';
   if (prevType === 'CONSTRAINT') return 'still';
@@ -213,7 +229,9 @@ export class HeuristicStructurer {
       // "this happened and then this happened" is two boxes.
       if (!text || (seen.has(key) && !NARRATIVE_CONNECTIVES.has(clause.connective))) continue;
       seen.add(key);
-      cand.push({ type, text, connective: clause.connective, ci });
+      // ground the box in the exact phrase the speaker said, so the review
+      // screen can show why this box exists (LangExtract-style grounding)
+      cand.push({ type, text, source: groundingOf(clause.text), connective: clause.connective, ci });
       if (cand.length >= 12) break;
     }
     let kept = cand;
@@ -231,7 +249,7 @@ export class HeuristicStructurer {
         const adjacent = c.ci === kept[i - 1].ci + 1;
         edges.push({ label: (adjacent && c.connective) || edgeLabel(kept[i - 1].type, c.type) });
       }
-      nodes.push(Object.assign({ type: c.type, text: c.text }, styleFor(c.type)));
+      nodes.push(Object.assign({ type: c.type, text: c.text, source: c.source }, styleFor(c.type)));
     });
     // name the thought like a chat: subject phrase, flavored by what
     // dominates the graph
@@ -256,9 +274,10 @@ const GRAPH_SCHEMA = {
         type: 'object',
         properties: {
           type: { type: 'string', enum: NODE_TYPES },
-          text: { type: 'string', description: 'A 3-4 word note — essential nouns/verbs plus any names, numbers, amounts, dates or negations; never a sentence, lowercase start' },
+          text: { type: 'string', description: 'A clear 5-6 word label, rewritten in plain words like an expert note-taker: oversimplify the phrasing but keep every important bit — names, numbers, amounts, dates, negations. Lowercase start, never a full sentence.' },
+          source: { type: 'string', description: 'The exact phrase from the transcript this box was drawn from, quoted verbatim (you may trim only fillers), so the user can tap the box and verify the interpretation. Never reworded.' },
         },
-        required: ['type', 'text'],
+        required: ['type', 'text', 'source'],
         additionalProperties: false,
       },
     },
@@ -268,7 +287,7 @@ const GRAPH_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          label: { type: 'string', description: 'Short connective, 1-2 words: led to, but, raises, so, then…' },
+          label: { type: 'string', description: 'The relationship, 1-2 words: the connective the speaker said (then, but, so, because) or an inferred one (leads to, causes, solved by, needs, toward, raises)' },
         },
         required: ['label'],
         additionalProperties: false,
@@ -280,28 +299,53 @@ const GRAPH_SCHEMA = {
 };
 
 const SYSTEM_PROMPT =
-  'You structure a person\'s spoken, rambling thought into a small graph while they talk. ' +
+  'You turn a person\'s spoken, rambling brainstorm into an explainable thought graph while they talk. ' +
+  'Your job is not to tag sentences — it is to (1) understand the ramble, (2) find the meaningful ' +
+  'thought units, (3) classify each, (4) rewrite each into a clean short label, (5) ground each in ' +
+  'the exact phrase that produced it, and (6) connect them.\n' +
   'Follow the speaker\'s own discourse: begin a NEW box exactly where they move to a new beat — ' +
   'a temporal shift ("and then", "after that", "eventually"), a contrast ("but", "however"), ' +
   'a consequence ("so", "which means"), a cause ("because"), or a fresh question ("I wonder", "what if"). ' +
   'A narrative like "this happened and then that happened" becomes separate EVENT boxes in speaking ' +
-  'order, joined by "then" — never merge distinct beats into one box, and never split a single beat. ' +
-  'Types: EVENT (something that happened or a step in a story), PROBLEM, CONTEXT, OPPORTUNITY, IDEA, ' +
-  'CONSTRAINT, OPEN QUESTION. Extract 2-12 boxes in the order the thought develops. ' +
-  'For each edge, use the connective word the speaker actually said ("then", "but", "so", "because", ' +
-  '"after that"); only fall back to an inferred label ("led to", "raises") when they said none. ' +
-  'Each box is a 3-4 word note in the speaker\'s own words — like an expert note taker: ' +
-  'oversimplify the phrasing but never lose an important bit. Keep names, numbers, amounts, ' +
-  'dates, times and negations ("rent eight hundred month", "meet sarah tuesday nine thirty", ' +
-  '"never listen voice memos"); drop pronouns, hedges and glue words. Never a full sentence. ' +
-  'Ignore filler words and false starts, and omit fluff entirely: greetings, mic checks, asides, ' +
-  'and meta-talk ("where was I", "hold on") — plus anything semantically unrelated to the thought. ' +
-  'Only what is important and belongs to the thought becomes a box. ' +
-  'Name the thought the way a chat gets auto-named: a specific 2-5 word Title Case title for the ' +
-  'whole recording ("Recording Voice Notes", "Storefront Rent Question") — never vague ones like ' +
-  '"My Thoughts" or "Voice Note". ' +
-  'If a structure template is named, prefer its box types. ' +
-  'The transcript may be mid-sentence — structure what is there so far without inventing content.';
+  'order — never merge distinct beats into one box, and never split a single beat.\n' +
+  'Types: EVENT (something that happened or a step in a story), PROBLEM (a difficulty, frustration or ' +
+  'unmet need), CONTEXT (background, a habit, or who is affected), OPPORTUNITY (a product or feature ' +
+  'being imagined), IDEA (a proposed way to address a problem), GOAL (the outcome the speaker wants), ' +
+  'CONSTRAINT (a requirement, limit or catch), OPEN QUESTION (something unresolved). ' +
+  'Extract 2-12 boxes in the order the thought develops.\n' +
+  'LABEL: rewrite each box into a clear 5-6 word phrase like an expert note-taker — oversimplify the ' +
+  'wording but never lose an important bit. Keep names, numbers, amounts, dates, times and negations ' +
+  '("important points get buried", "rent is eight hundred a month", "meet sarah tuesday at nine"); drop ' +
+  'hedges, filler and glue words. It is a label, never a full sentence.\n' +
+  'SOURCE: for every box, copy the exact phrase from the transcript it came from into "source", ' +
+  'verbatim (trim only fillers) — this is what the user taps to check your interpretation, so it must ' +
+  'stay faithful to what they actually said and never be reworded.\n' +
+  'EDGES: label each with the connective the speaker said ("then", "but", "so", "because"); otherwise ' +
+  'infer the relationship ("leads to", "causes", "solved by", "needs", "toward", "raises").\n' +
+  'Omit fluff entirely: greetings, mic checks, asides, meta-talk ("where was I", "hold on") and anything ' +
+  'unrelated to the thought — only what matters becomes a box, and never invent content that was not said.\n' +
+  'Name the whole thought the way a chat gets auto-named: a specific 2-5 word Title Case title ' +
+  '("Recording Voice Notes", "Storefront Rent Question") — never vague like "My Thoughts".\n' +
+  'If a structure template is named, prefer its box types. The transcript may be mid-sentence — ' +
+  'structure what is there so far.';
+
+// One teaching example (LangExtract-style): the transformation is taught by
+// demonstration, not just described. Matches GRAPH_SCHEMA exactly.
+const EXAMPLE_INPUT =
+  "for a while i've been talking to people about an issue they have, they like to record their dreams " +
+  "but it's a lot of information and it's hard to get the point, i feel like it'd be cool if there was " +
+  "an app that could transcribe your dreams but really just keep the most important points";
+const EXAMPLE_OUTPUT = {
+  title: 'Condensing Recorded Dreams',
+  nodes: [
+    { type: 'CONTEXT', text: 'people like recording their dreams', source: 'they like to record their dreams' },
+    { type: 'PROBLEM', text: 'dream recordings hold too much', source: "it's a lot of information" },
+    { type: 'PROBLEM', text: 'the key point gets buried', source: "it's hard to get the point" },
+    { type: 'OPPORTUNITY', text: 'an app to transcribe dreams', source: "it'd be cool if there was an app that could transcribe your dreams" },
+    { type: 'IDEA', text: 'keep only the important points', source: 'really just keep the most important points' },
+  ],
+  edges: [{ label: 'so' }, { label: 'and' }, { label: 'so' }, { label: 'does' }],
+};
 
 export class ClaudeStructurer {
   constructor(apiKey) {
@@ -324,16 +368,20 @@ export class ClaudeStructurer {
           max_tokens: 1024,
           output_config: { format: { type: 'json_schema', schema: GRAPH_SCHEMA }, effort: 'low' },
           system: SYSTEM_PROMPT,
-          messages: [{
-            role: 'user',
-            content: (opts && opts.template ? 'Structure template: ' + opts.template + '\n\n' : '') +
-              (opts && opts.template && MINIMAL_TYPES[opts.template]
-                ? 'Keep the bare minimum: at most ' + MINIMAL_CAP + ' boxes of only the types ' +
-                  MINIMAL_TYPES[opts.template].join(', ') +
-                  ' — drop hedges, asides, and every clause that does not fit those types.\n\n'
-                : '') +
-              'Transcript so far:\n' + transcript,
-          }],
+          messages: [
+            { role: 'user', content: 'Transcript so far:\n' + EXAMPLE_INPUT },
+            { role: 'assistant', content: JSON.stringify(EXAMPLE_OUTPUT) },
+            {
+              role: 'user',
+              content: (opts && opts.template ? 'Structure template: ' + opts.template + '\n\n' : '') +
+                (opts && opts.template && MINIMAL_TYPES[opts.template]
+                  ? 'Keep the bare minimum: at most ' + MINIMAL_CAP + ' boxes of only the types ' +
+                    MINIMAL_TYPES[opts.template].join(', ') +
+                    ' — drop hedges, asides, and every clause that does not fit those types.\n\n'
+                  : '') +
+                'Transcript so far:\n' + transcript,
+            },
+          ],
         }),
       });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -342,7 +390,7 @@ export class ClaudeStructurer {
       const block = (data.content || []).find((b) => b.type === 'text');
       const graph = JSON.parse(block.text);
       const nodes = (graph.nodes || []).slice(0, 12).map((n) =>
-        Object.assign({ type: n.type, text: n.text }, styleFor(n.type)));
+        Object.assign({ type: n.type, text: n.text, source: n.source || '' }, styleFor(n.type)));
       const edges = (graph.edges || []).slice(0, Math.max(0, nodes.length - 1));
       if (!nodes.length) throw new Error('empty');
       return { nodes, edges, title: graph.title || null, engine: this.engine };

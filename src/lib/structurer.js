@@ -5,7 +5,7 @@
 //                         used when an API key is configured, falls back to
 //                         the heuristic on any failure.
 import { isQuestionish, hasPastAction, splitRunOn, topicOf } from './linguistics.js';
-import { rankTranscript, noteFor } from './notetaker.js';
+import { rankTranscript, noteFor, titleFor } from './notetaker.js';
 import { refineType, neuralEnabled } from './semantic.js';
 import { isFluff, scrubFluff, filterUnrelated } from './salience.js';
 
@@ -194,11 +194,12 @@ export class HeuristicStructurer {
     const seen = new Set(), cand = [];
     // Cut the fluff: meta-talk clauses always; semantically unrelated asides
     // when the neural boost is on
-    let clauses = segmentClauses(scrubFluff(transcript)).filter((c) => !isFluff(c.text));
+    const scrubbed = scrubFluff(transcript);
+    let clauses = segmentClauses(scrubbed).filter((c) => !isFluff(c.text));
     clauses = await filterUnrelated(clauses);
     // Importance scores span the whole transcript, so each box keeps the
     // words that matter to the thought — not just to its own clause
-    const rank = rankTranscript(scrubFluff(transcript));
+    const rank = rankTranscript(scrubbed);
     for (let ci = 0; ci < clauses.length; ci++) {
       const clause = clauses[ci];
       let type = classify(clause.text, clause.connective);
@@ -232,7 +233,12 @@ export class HeuristicStructurer {
       }
       nodes.push(Object.assign({ type: c.type, text: c.text }, styleFor(c.type)));
     });
-    return { nodes, edges, engine: this.engine };
+    // name the thought like a chat: subject phrase, flavored by what
+    // dominates the graph
+    const counts = {};
+    kept.forEach((c) => { counts[c.type] = (counts[c.type] || 0) + 1; });
+    const dominant = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+    return { nodes, edges, title: titleFor(scrubbed, rank, dominant), engine: this.engine };
   }
 }
 
@@ -240,6 +246,10 @@ export class HeuristicStructurer {
 const GRAPH_SCHEMA = {
   type: 'object',
   properties: {
+    title: {
+      type: 'string',
+      description: 'A short chat-style name for the whole thought, 2-5 words in Title Case, naming the subject — like "Recording Voice Notes" or "Storefront Rent Question", never generic like "My Thoughts"',
+    },
     nodes: {
       type: 'array',
       items: {
@@ -265,7 +275,7 @@ const GRAPH_SCHEMA = {
       },
     },
   },
-  required: ['nodes', 'edges'],
+  required: ['title', 'nodes', 'edges'],
   additionalProperties: false,
 };
 
@@ -287,6 +297,9 @@ const SYSTEM_PROMPT =
   'Ignore filler words and false starts, and omit fluff entirely: greetings, mic checks, asides, ' +
   'and meta-talk ("where was I", "hold on") — plus anything semantically unrelated to the thought. ' +
   'Only what is important and belongs to the thought becomes a box. ' +
+  'Name the thought the way a chat gets auto-named: a specific 2-5 word Title Case title for the ' +
+  'whole recording ("Recording Voice Notes", "Storefront Rent Question") — never vague ones like ' +
+  '"My Thoughts" or "Voice Note". ' +
   'If a structure template is named, prefer its box types. ' +
   'The transcript may be mid-sentence — structure what is there so far without inventing content.';
 
@@ -332,7 +345,7 @@ export class ClaudeStructurer {
         Object.assign({ type: n.type, text: n.text }, styleFor(n.type)));
       const edges = (graph.edges || []).slice(0, Math.max(0, nodes.length - 1));
       if (!nodes.length) throw new Error('empty');
-      return { nodes, edges, engine: this.engine };
+      return { nodes, edges, title: graph.title || null, engine: this.engine };
     } catch (e) {
       const out = await this._fallback.structure(transcript);
       out.engine = 'on-device (Claude unavailable)';

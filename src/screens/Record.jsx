@@ -147,7 +147,7 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
       const g = await structurerRef.current.structure(text, { template: tplName });
       if (aliveRef.current) {
         const prev = s.nodes.length;
-        s.nodes = g.nodes; s.edges = g.edges;
+        s.nodes = g.nodes; s.edges = g.edges; s.title = g.title || s.title;
         setGraph({ nodes: g.nodes, edges: g.edges, freshFrom: prev });
       }
     } else if (aliveRef.current) {
@@ -226,10 +226,15 @@ export default function Record({ template, recordFolder, demo, typedMode, initia
     const s = stateRef.current;
     if (capRef.current) { capRef.current.stop(); capRef.current = null; }
     if (!s.nodes.length) { onDone(null); return; }
-    const t = s.nodes.find((n) => n.type === 'OPPORTUNITY' || n.type === 'IDEA') || s.nodes[0];
-    let title = t.text.replace(/[?.]$/, '');
-    if (title.length > 34) title = title.slice(0, 34).replace(/\s\S*$/, '') + '…';
-    onDone({ nodes: s.nodes, edges: s.edges, title: title.charAt(0).toUpperCase() + title.slice(1) });
+    // the structurer names the thought; fall back to the strongest box text
+    let title = s.title;
+    if (!title) {
+      const t = s.nodes.find((n) => n.type === 'OPPORTUNITY' || n.type === 'IDEA') || s.nodes[0];
+      title = t.text.replace(/[?.]$/, '');
+      if (title.length > 34) title = title.slice(0, 34).replace(/\s\S*$/, '') + '…';
+      title = title.charAt(0).toUpperCase() + title.slice(1);
+    }
+    onDone({ nodes: s.nodes, edges: s.edges, title });
   };
 
   const togglePause = () => {

@@ -16,6 +16,7 @@ const LABELS = [
   ['EVENT', 'something that happened, a step in a story'],
   ['CONTEXT', 'background context or a habit'],
   ['OPEN QUESTION', 'an unresolved question to figure out'],
+  ['GOAL', 'a goal or outcome the speaker wants'],
 ];
 const MIN_CONFIDENCE = 0.4;
 

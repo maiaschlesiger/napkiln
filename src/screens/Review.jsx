@@ -7,11 +7,11 @@ import { createCapture } from '../lib/whisper.js';
 import { summarizeClause } from '../lib/structurer.js';
 
 const DEMO_NODES = [
-  { type: 'PROBLEM', c: TEAL, text: 'voice notes go unheard', solid: true },
-  { type: 'CONTEXT', c: TEAL, text: 'ideas happen while moving', solid: false },
-  { type: 'OPPORTUNITY', c: TEAL, text: 'visualize how the idea develops', solid: true },
-  { type: 'CONSTRAINT', c: CLAY, text: 'mind maps feel rigid', solid: true },
-  { type: 'OPEN QUESTION', c: CLAY, text: 'thoughts containing smaller thoughts?', solid: false },
+  { type: 'PROBLEM', c: TEAL, text: 'voice notes go unheard', solid: true, source: 'People record these long voice memos and then never actually listen back to them' },
+  { type: 'CONTEXT', c: TEAL, text: 'ideas happen while moving', solid: false, source: 'The best ideas always show up mid-walk or on the commute' },
+  { type: 'OPPORTUNITY', c: TEAL, text: 'visualize how the idea develops', solid: true, source: "It'd be cool to watch the thought take shape as you speak" },
+  { type: 'CONSTRAINT', c: CLAY, text: 'mind maps feel rigid', solid: true, source: 'But mind maps feel too rigid and kind of kill the flow' },
+  { type: 'OPEN QUESTION', c: CLAY, text: 'thoughts containing smaller thoughts?', solid: false, source: 'I wonder if a thought could hold smaller thoughts inside it' },
 ];
 const DEMO_EDGES = [{ label: 'led to' }, { label: 'so' }, { label: 'but' }, { label: 'raises' }];
 const RERECORD = [
@@ -53,6 +53,15 @@ function Box({ n, i, focus, editing, listening, micStatus, onCommit, onBubble, b
             style={{ border: 'none', borderBottom: `1px solid ${TEAL}`, background: 'none', outline: 'none', ...sans(400, 14, INK), textAlign: 'center', width: 210, padding: '0 0 2px' }}
           />
         : <span style={{ ...sans(400, 14, INK), lineHeight: 1.35, textAlign: 'center' }}>{n.text}</span>}
+      {me && n.source && editing !== i && listening !== i && (
+        <span
+          className="g2-source"
+          style={{ marginTop: 7, paddingTop: 7, maxWidth: 226, borderTop: `1px solid ${dim(.09)}`, ...sans(400, 11.5, dim(.55)), fontStyle: 'italic', lineHeight: 1.4, textAlign: 'center' }}
+        >
+          <span style={{ ...mono(8, TEAL), fontStyle: 'normal', display: 'block', marginBottom: 2, letterSpacing: '.06em' }}>YOU SAID</span>
+          “{n.source}”
+        </span>
+      )}
       {listening === i && (
         <span
           className="g2-micchip"
@@ -126,7 +135,8 @@ export default function Review({ graph, stage, mode, folders, onSaved, onBack, o
       if (!heard) return;
       micHeardRef.current = true;
       setMicStatus(null);
-      setNodes((ns) => ns.map((n, k) => (k === i ? { ...n, text: summarizeClause(heard) } : n)));
+      const src = heard.charAt(0).toUpperCase() + heard.slice(1);
+      setNodes((ns) => ns.map((n, k) => (k === i ? { ...n, text: summarizeClause(heard), source: src } : n)));
     }, (st) => {
       if (st === 'denied' || st === 'error') { stopMic(false); setEditing(i); }
       else if (st === 'loading') setMicStatus('loading model…');
@@ -210,7 +220,7 @@ export default function Review({ graph, stage, mode, folders, onSaved, onBack, o
                 : <span className="g2-ptitle" style={sans(500, 19, INK)}>{title}</span>}
               <button className="g2-tedit" onClick={() => setEditTitle(true)} style={{ border: 'none', background: 'none', cursor: 'pointer', ...sans(400, 16, dim(.55)), flex: 'none', padding: '2px 4px' }}>✎</button>
             </span>
-            <span style={sans(400, 12, dim(.45))}>today · filed under <span style={{ color: TEAL }}>Product ideas</span> · tap a box to change it</span>
+            <span style={sans(400, 12, dim(.45))}>today · filed under <span style={{ color: TEAL }}>Product ideas</span> · tap a box to see what you said</span>
           </span>
         </div>
         {chain}
@@ -243,7 +253,7 @@ export default function Review({ graph, stage, mode, folders, onSaved, onBack, o
           <span style={{ fontSize: 19, color: dim(.5), padding: '2px 8px 2px 0' }}>←</span>
           <span style={sans(500, 14, INK)}>Your thought</span>
         </span>
-        <span style={sans(400, 12, dim(.4))}>hold a box to change it</span>
+        <span style={sans(400, 12, dim(.4))}>hold a box — see what you said</span>
       </div>
       {chain}
       <div className="g2-panel" style={{ ...abs({ left: 0, right: 0, bottom: 0 }), height: 304, background: '#FFF', borderTop: `1px solid ${dim(.1)}`, boxShadow: `0 -6px 24px ${dim(.06)}`, padding: '16px 24px 26px', boxSizing: 'border-box', zIndex: 10 }}>

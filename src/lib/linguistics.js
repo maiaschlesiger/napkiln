@@ -4,18 +4,19 @@
 // hiccup the caller gets the "no signal" answer and the regex heuristics in
 // structurer.js still apply.
 import nlp from 'compromise';
+import { memoize } from './memo.js';
 
 // True for question-shaped clauses even without a question mark —
 // aux-inversion and wh-words ("how do I get people to trust it").
-export function isQuestionish(text) {
+export const isQuestionish = memoize(function isQuestionish(text) {
   try { return nlp(text).questions().length > 0; } catch (e) { return false; }
-}
+});
 
 // True when the clause narrates something that happened (any past-tense verb,
 // not just ones we enumerated by hand: "she texted me back" → texted).
-export function hasPastAction(text) {
+export const hasPastAction = memoize(function hasPastAction(text) {
   try { return nlp(text).verbs().if('#PastTense').length > 0; } catch (e) { return false; }
-}
+});
 
 // Distill a clause to a 3-4 word topic label — the essential nouns, verbs and
 // qualifiers, never a sentence. "the rent would be too expensive" → "rent too
@@ -49,7 +50,7 @@ export function prepClause(text) {
 const AUX_RE = /^(do|does|did|is|are|was|were|should|could|would|can|will|might)$/i;
 const LINKING_RE = /^(feel|feels|felt|seem|seems|seemed|look|looks|looked|sound|sounds|get|gets|got|become|becomes|became)$/i;
 
-export function topicOf(text) {
+function topicOfImpl(text) {
   try {
     const q = /\?\s*$/.test(text.trim()) || isQuestionish(text);
     const src = prepClause(text);
@@ -169,7 +170,7 @@ export function topicOf(text) {
 const SUBJ_TAGS = ['Pronoun', 'Noun', 'ProperNoun', 'Determiner', 'Possessive'];
 const BLOCK_PREV = ['Preposition', 'Determiner', 'Adjective', 'Conjunction', 'Possessive', 'Verb', 'Negative', 'QuestionWord'];
 
-export function splitRunOn(text) {
+function splitRunOnImpl(text) {
   try {
     if (text.split(/\s+/).filter(Boolean).length < 8) return [text];
     // What-if musings and wondered questions are one box by nature
@@ -222,3 +223,8 @@ export function splitRunOn(text) {
     return [text];
   }
 }
+
+// Both are pure functions of their input text and are re-invoked per clause on
+// every live-structuring pass — memoize so repeated clauses cost nothing.
+export const topicOf = memoize(topicOfImpl);
+export const splitRunOn = memoize(splitRunOnImpl, (t) => t, 256);

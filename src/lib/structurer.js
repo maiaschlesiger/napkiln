@@ -66,6 +66,18 @@ const MINIMAL_TYPES = {
 };
 const MINIMAL_CAP = 5;      // boxes
 const MINIMAL_WORDS = 4;    // words per box (fallback cap when no topic emerges)
+const LIVE_WINDOW_CHARS = 2800; // ~480 words — recent context structured live
+
+// Live passes structure only a recent window (bounded, fast); the finish pass
+// (full=true) uses the whole transcript so the saved thought is complete.
+// Without this every debounced pass re-parses the entire growing transcript,
+// which eventually stalls the page on a long recording.
+function liveWindow(transcript, full) {
+  if (full || transcript.length <= LIVE_WINDOW_CHARS) return transcript;
+  const w = transcript.slice(transcript.length - LIVE_WINDOW_CHARS);
+  const sp = w.indexOf(' ');        // don't start mid-word
+  return sp > 0 ? w.slice(sp + 1) : w;
+}
 
 // ---------------------------------------------------------------------------
 // Discourse-driven segmentation. Speech transcripts arrive largely
@@ -229,7 +241,11 @@ export class HeuristicStructurer {
     const seen = new Set(), cand = [];
     // Cut the fluff: meta-talk clauses always; semantically unrelated asides
     // when the neural boost is on
-    const scrubbed = scrubFluff(transcript);
+    // Live passes fire on a debounce and only ever show a handful of boxes, so
+    // re-segmenting/scoring the whole growing transcript each pass is wasted
+    // work that eventually janks the page. Structure a recent window live; the
+    // finish pass (opts.full) covers the whole transcript so nothing is lost.
+    const scrubbed = scrubFluff(liveWindow(transcript, opts && opts.full));
     let clauses = segmentClauses(scrubbed).filter((c) => !isFluff(c.text));
     clauses = await filterUnrelated(clauses);
     // Importance scores span the whole transcript, so each box keeps the
@@ -404,6 +420,7 @@ export class ClaudeStructurer {
     this._fallback = new HeuristicStructurer();
   }
   async structure(transcript, opts) {
+    const work = liveWindow(transcript, opts && opts.full);
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -430,7 +447,7 @@ export class ClaudeStructurer {
                     TEMPLATE_ROLES[opts.template].join(', ') + ' — skipping any role that was not ' +
                     'expressed. At most ' + MINIMAL_CAP + ' boxes; drop everything that fills no role.\n\n'
                   : '') +
-                'Transcript so far:\n' + transcript,
+                'Transcript so far:\n' + work,
             },
           ],
         }),
@@ -446,7 +463,7 @@ export class ClaudeStructurer {
       if (!nodes.length) throw new Error('empty');
       return { nodes, edges, title: graph.title || null, engine: this.engine };
     } catch (e) {
-      const out = await this._fallback.structure(transcript);
+      const out = await this._fallback.structure(transcript, opts);
       out.engine = 'on-device (Claude unavailable)';
       return out;
     }

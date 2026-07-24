@@ -41,6 +41,38 @@ function loadClassifier() {
   return zscPromise;
 }
 
+// Role descriptions the model scores a span against — used by the template
+// role extractor so it "listens" specifically for each role in a structure.
+const ROLE_DESC = {
+  PROBLEM: 'a problem, frustration, or unmet need',
+  AUDIENCE: 'the people or users who are affected',
+  OPPORTUNITY: 'a product, app, or opportunity being imagined',
+  IDEA: 'a proposed solution or way to do it',
+  'OPEN QUESTION': 'an unresolved question to figure out',
+  CONTEXT: 'background context, a habit, or how things are',
+  GOAL: 'a goal or desired outcome',
+  CONSTRAINT: 'a limitation, catch, or constraint',
+  EVENT: 'something that happened, a step in a story',
+};
+
+// Score a span against a subset of roles; returns { role, score } for the best
+// fit, or null when the boost is off/unavailable/not confident. Best-effort:
+// any failure yields null and the caller falls back to its cue lexicon.
+export async function classifyRoles(text, roles) {
+  if (!neuralEnabled() || !neuralAvailable()) return null;
+  const descs = roles.map((r) => ROLE_DESC[r]).filter(Boolean);
+  if (descs.length < 2) return null;
+  try {
+    const classify = await loadClassifier();
+    const out = await classify(text, descs);
+    if (!out || !out.labels) return null;
+    const role = roles.find((r) => ROLE_DESC[r] === out.labels[0]);
+    return role ? { role, score: out.scores[0] } : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 // Re-type a clause the heuristics weren't sure about. Returns the fallback
 // type unless the model is enabled, loaded, and confident.
 export async function refineType(text, fallback) {

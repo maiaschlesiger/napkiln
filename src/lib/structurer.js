@@ -6,12 +6,13 @@
 //                         the heuristic on any failure.
 import { isQuestionish, hasPastAction, splitRunOn, topicOf } from './linguistics.js';
 import { rankTranscript, noteFor, titleFor } from './notetaker.js';
+import { assignRoles, cueScore, TEMPLATE_ROLES } from './roles.js';
 import { refineType, neuralEnabled } from './semantic.js';
 import { isFluff, scrubFluff, filterUnrelated } from './salience.js';
 
 const TEAL = '#1F8A96', CLAY = '#E0824E';
 const KEY_STORAGE = 'napkiln-anthropic-key';
-const NODE_TYPES = ['PROBLEM', 'CONTEXT', 'OPPORTUNITY', 'IDEA', 'CONSTRAINT', 'OPEN QUESTION', 'EVENT', 'GOAL'];
+const NODE_TYPES = ['PROBLEM', 'CONTEXT', 'OPPORTUNITY', 'IDEA', 'CONSTRAINT', 'OPEN QUESTION', 'EVENT', 'GOAL', 'AUDIENCE'];
 const styleFor = (type) => ({
   c: (type === 'CONSTRAINT' || type === 'OPEN QUESTION') ? CLAY : TEAL,
   solid: !(type === 'OPEN QUESTION' || type === 'CONTEXT'),
@@ -134,8 +135,10 @@ function findSplit(text) {
 }
 
 // -> [{ text, connective }] where connective is the spoken word that opened
-//    this clause (null for the first clause of a breath)
-function segmentClauses(transcript) {
+//    this clause (null for the first clause of a breath). split=false stops
+//    before the marker-less run-on pass, keeping fuller clauses — the role
+//    extractor wants whole beats to score, not sub-clause fragments.
+function segmentClauses(transcript, split = true) {
   const clauses = [];
   for (let sentence of transcript.split(/(?<=[.?!;])\s+|\n+/)) {
     sentence = sentence.trim();
@@ -162,6 +165,7 @@ function segmentClauses(transcript) {
   // wanted to pay for it") still carry several beats — split them at
   // POS-detected subject–verb boundaries; the spoken connective stays with
   // the first piece.
+  if (!split) return clauses.filter((c) => wordCount(c.text) >= 2);
   return clauses
     .flatMap((c) => splitRunOn(c.text).map((text, i) => ({ text, connective: i === 0 ? c.connective : null })))
     .filter((c) => wordCount(c.text) >= 2);
@@ -203,6 +207,21 @@ function edgeLabel(prevType, nextType) {
   return 'then';
 }
 
+// Within a detected beat, find the sub-clause that most expresses the role,
+// so the box labels the point ("record their dreams") rather than smearing the
+// whole beat's words together. Falls back to the beat when no split helps.
+function bestSubspan(text, role) {
+  const pieces = splitRunOn(text);
+  if (pieces.length <= 1) return text;
+  let best = text, bestScore = cueScore(text, role) - 0.01;
+  for (const p of pieces) {
+    if (wordCount(p) < 2) continue;
+    const sc = cueScore(p, role);
+    if (sc > bestScore) { bestScore = sc; best = p; }
+  }
+  return best;
+}
+
 export class HeuristicStructurer {
   constructor() { this.engine = neuralEnabled() ? 'on-device neural' : 'on-device'; }
   async structure(transcript, opts) {
@@ -216,6 +235,29 @@ export class HeuristicStructurer {
     // Importance scores span the whole transcript, so each box keeps the
     // words that matter to the thought — not just to its own clause
     const rank = rankTranscript(scrubbed);
+    const GOLDEN = 6; // template boxes get a slightly longer "golden" label
+    // Role-first path: for a named structure, listen for each role it expects
+    // (problem, audience, opportunity, question…) and keep the single best
+    // clause per role — condensed into a golden box, grounded in what was said.
+    if (opts && opts.template && TEMPLATE_ROLES[opts.template]) {
+      const picks = await assignRoles(clauses, opts.template);
+      if (picks.length >= 2) {
+        const kept = picks.map((p) => {
+          // within the clause, label + ground from the sub-span that most
+          // expresses the role ("record their dreams", not the whole beat)
+          const src = bestSubspan(clauses[p.ci].text, p.type);
+          return {
+            type: p.type,
+            text: noteFor(src, rank, GOLDEN) || topicOf(src) || summarize(src, GOLDEN, true),
+            source: groundingOf(src),
+            connective: clauses[p.ci].connective,
+            ci: p.ci,
+          };
+        }).slice(0, MINIMAL_CAP);
+        return this._assemble(kept, scrubbed, rank);
+      }
+      // too few roles filled — fall through to discourse segmentation
+    }
     for (let ci = 0; ci < clauses.length; ci++) {
       const clause = clauses[ci];
       let type = classify(clause.text, clause.connective);
@@ -242,6 +284,11 @@ export class HeuristicStructurer {
       if (filtered.length >= 2) kept = filtered;
       kept = kept.slice(0, MINIMAL_CAP);
     }
+    return this._assemble(kept, scrubbed, rank);
+  }
+
+  // Turn kept candidates into nodes + edges + a chat-style title.
+  _assemble(kept, scrubbed, rank) {
     const nodes = [], edges = [];
     kept.forEach((c, i) => {
       if (i) {
@@ -309,10 +356,13 @@ const SYSTEM_PROMPT =
   'A narrative like "this happened and then that happened" becomes separate EVENT boxes in speaking ' +
   'order — never merge distinct beats into one box, and never split a single beat.\n' +
   'Types: EVENT (something that happened or a step in a story), PROBLEM (a difficulty, frustration or ' +
-  'unmet need), CONTEXT (background, a habit, or who is affected), OPPORTUNITY (a product or feature ' +
-  'being imagined), IDEA (a proposed way to address a problem), GOAL (the outcome the speaker wants), ' +
-  'CONSTRAINT (a requirement, limit or catch), OPEN QUESTION (something unresolved). ' +
-  'Extract 2-12 boxes in the order the thought develops.\n' +
+  'unmet need), CONTEXT (background or a habit), AUDIENCE (the people who have the problem, and what ' +
+  'they do), OPPORTUNITY (a product or feature being imagined), IDEA (a proposed way to address a ' +
+  'problem), GOAL (the outcome the speaker wants), CONSTRAINT (a requirement, limit or catch), ' +
+  'OPEN QUESTION (something unresolved). Extract 2-12 boxes in the order the thought develops.\n' +
+  'Work role-first: decide which roles the thought actually contains, then for each role capture the ' +
+  'one phrase that best expresses it and condense that — separate the context from the audience from ' +
+  'the problem from the solution, each in its own box.\n' +
   'LABEL: rewrite each box into a clear 5-6 word phrase like an expert note-taker — oversimplify the ' +
   'wording but never lose an important bit. Keep names, numbers, amounts, dates, times and negations ' +
   '("important points get buried", "rent is eight hundred a month", "meet sarah tuesday at nine"); drop ' +
@@ -374,10 +424,11 @@ export class ClaudeStructurer {
             {
               role: 'user',
               content: (opts && opts.template ? 'Structure template: ' + opts.template + '\n\n' : '') +
-                (opts && opts.template && MINIMAL_TYPES[opts.template]
-                  ? 'Keep the bare minimum: at most ' + MINIMAL_CAP + ' boxes of only the types ' +
-                    MINIMAL_TYPES[opts.template].join(', ') +
-                    ' — drop hedges, asides, and every clause that does not fit those types.\n\n'
+                (opts && opts.template && TEMPLATE_ROLES[opts.template]
+                  ? 'This is a "' + opts.template + '" structure. Listen specifically for each of these ' +
+                    'roles and make at most one golden box for each you actually hear — ' +
+                    TEMPLATE_ROLES[opts.template].join(', ') + ' — skipping any role that was not ' +
+                    'expressed. At most ' + MINIMAL_CAP + ' boxes; drop everything that fills no role.\n\n'
                   : '') +
                 'Transcript so far:\n' + transcript,
             },

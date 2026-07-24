@@ -10,6 +10,7 @@ import winkNLP from 'wink-nlp';
 import model from 'wink-eng-lite-web-model';
 import compromise from 'compromise';
 import { prepClause, isQuestionish } from './linguistics.js';
+import { memoize } from './memo.js';
 
 const nlp = winkNLP(model, ['sbd', 'pos', 'ner']);
 const its = nlp.its;
@@ -37,9 +38,10 @@ const WEAK_ADJ = /^(own|same|such|other|whole|able|sure)$/i;
 // ---------------------------------------------------------------------------
 const WINDOW = 4;
 const DAMPING = 0.85;
-const ITERATIONS = 20;
+const ITERATIONS = 10; // TextRank converges well before 20; half the work
+const RANK_MAX_TOKENS = 1500; // cap work on very long recordings
 
-export function rankTranscript(text) {
+function rankTranscriptImpl(text) {
   const rank = new Map();
   try {
     const seq = [];
@@ -47,6 +49,9 @@ export function rankTranscript(text) {
       if (CONTENT_POS.has(t.out(its.pos))) seq.push(t.out(its.lemma));
     });
     if (!seq.length) return rank;
+    // long recordings: rank only the most recent window (importance for the
+    // current boxes is driven by recent + repeated terms anyway)
+    if (seq.length > RANK_MAX_TOKENS) seq.splice(0, seq.length - RANK_MAX_TOKENS);
     const edges = new Map(); // lemma -> Map(neighbor -> weight)
     const link = (a, b) => {
       if (a === b) return;
@@ -78,18 +83,19 @@ export function rankTranscript(text) {
   } catch (e) { /* no ranking — noteFor scores on POS alone */ }
   return rank;
 }
+// Memoized by transcript text — a stable transcript re-ranks for free.
+export const rankTranscript = memoize(rankTranscriptImpl, (t) => t, 64);
 
 // ---------------------------------------------------------------------------
 // One clause -> one note. Candidate words are scored by transcript-wide
 // TextRank importance plus what they are (an amount beats an adjective);
 // the top few survive in speaking order.
 // ---------------------------------------------------------------------------
-const MAX_WORDS = 8;      // a note is ~5-8 words (fewer for short clauses)…
-const MAX_WITH_ENT = 9;   // …stretching to 9 to keep a multi-word entity whole
+const MAX_WORDS = 7;      // a note is ~5-7 words (fewer for short clauses)…
+const MAX_WITH_ENT = 8;   // …stretching to 8 to keep a multi-word entity whole
 
-// maxWords lets a caller ask for a slightly longer "golden" box (role-driven
-// template extraction wants 5-6 words); free-flow notes stay terse at 4.
-export function noteFor(text, rank, maxWords = MAX_WORDS) {
+// maxWords lets a caller ask for a slightly longer "golden" box.
+function noteForImpl(text, rank, maxWords = MAX_WORDS) {
   const cap0 = maxWords;
   const capEnt = maxWords + 1;
   try {
@@ -193,6 +199,10 @@ const CLAUSE_BREAK = new Set(['CCONJ', 'SCONJ', 'PUNCT']);
 const LEAD_TRIM = new Set(['AUX', 'PART', 'CCONJ', 'SCONJ', 'ADP']);
 const TRAIL_TRIM = new Set(['AUX', 'PART', 'CCONJ', 'SCONJ', 'ADP', 'DET', 'PRON', 'ADV']);
 
+// Memoized public entry — the label of a given clause at a given length is
+// stable across passes, so caching by (text|maxWords) makes re-runs free.
+export const noteFor = memoize(noteForImpl, (text, _rank, mw = MAX_WORDS) => text + '|' + mw);
+
 // ---------------------------------------------------------------------------
 // Thought naming — a short, chat-style title for the whole recording.
 // The best TextRank-scored noun phrase names the subject ("voice notes",
@@ -209,7 +219,7 @@ const titleCase = (s) => s.split(' ')
   .map((w, i) => (i > 0 && SMALL_WORD.test(w) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)))
   .join(' ');
 
-export function titleFor(text, rank, dominantType) {
+function titleForImpl(text, rank, dominantType) {
   try {
     rank = rank || rankTranscript(text);
     const doc = nlp.readDoc(text);
@@ -276,3 +286,4 @@ export function titleFor(text, rank, dominantType) {
     return null;
   }
 }
+export const titleFor = memoize(titleForImpl, (text, _rank, dom) => text + '|' + (dom || ''), 64);
